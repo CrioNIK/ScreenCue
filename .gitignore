@@ -1,0 +1,8 @@
+/target/
+/dist/
+*.exe
+*.pdb
+*.zip
+.DS_Store
+/package/
+*.tar.gz
