@@ -19,6 +19,16 @@ codex mcp get screencue
 
 Codex stores this in `~/.codex/config.toml`; local desktop, CLI, and IDE clients share MCP configuration on the same Codex host. Start a new session and check `/mcp`. Local CLI help was checked alongside the [official Codex MCP guide](https://developers.openai.com/codex/mcp/). A particular voice surface must expose the connected tools to the agent for it to use them.
 
+### Dot / Alt: direct voice control
+
+The intended flow is **the current voice agent observes the screen and calls ScreenCue directly**. Showing one cue must not require creating another chat, messaging an existing task, or handing the user to another agent. Passive observation must leave the user's foreground window unchanged. If the voice session lacks a permitted passive screen tool or ScreenCue, report the missing capability instead of opening windows or delegating the pointing request.
+
+Registering a local MCP server in Codex does not establish that it is available to a separate Dot session. OpenAI documents Dot as a cloud agent with a separate local-computer connection and environment-dependent plugin access. Connecting that computer is separate from Codex's host connection. See [Dot computers and apps](https://learn.chatgpt.com/docs/dots/computers-and-apps). Voice inside an existing Codex task is a different surface and can use that task's conversation; see [ChatGPT Voice](https://learn.chatgpt.com/docs/features/voice).
+
+Direct Dot support is **not yet verified**. ScreenCue supplies local stdio tools, not a cloud relay, voice engine, or a mechanism to add tools to another application's voice session. Do not advertise direct Dot support merely because a delegated Codex task successfully displayed an arrow.
+
+To verify a direct integration, inspect the actual tool list in the Dot voice session, call `screen_displays` there, then use a fresh passive observation and call `screen_hint` from the same session. Confirm the cue appears, no other chat is created or messaged, and no window is activated. Call `screen_clear` from that same session. Tool availability, visible drawing, and the absence of delegation must all be checked.
+
 ### Claude Code
 
 ```powershell
