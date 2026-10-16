@@ -16,4 +16,4 @@ codex mcp add screencue -- "C:\Tools\ScreenCue\screencue.exe" --mcp
 
 Windows x64; macOS 12.3+ (автоцвет по экрану — 15.2+ с уже выданным разрешением); Linux x64/X11 с композитором. Native Wayland пока не поддерживается. Выпуск предварительный; поведение живого окна проверено на Windows, для macOS/Linux выполнены сборки и модульные тесты.
 
-[Исходники, параметры и ограничения](https://github.com/CrioNIK/ScreenCue). Код: MIT (`LICENSE`), встроенный шрифт IBM Plex Mono: SIL OFL (`licenses/IBM-Plex-Mono-OFL.txt`).
+[Исходники, параметры и ограничения](https://github.com/CrioNIK/ScreenCue). Код: MIT (`LICENSE`), встроенный шрифт IBM Plex Mono: SIL OFL (`licenses/IBM-Plex-Mono-OFL.txt`). Уведомления о библиотеках находятся в `licenses/THIRD-PARTY-LICENSES.txt`.

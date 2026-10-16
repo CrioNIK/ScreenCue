@@ -67,6 +67,7 @@ jobs:
           cp LICENSE package/
           cp docs/QUICKSTART.md package/README.md
           cp assets/OFL.txt package/licenses/IBM-Plex-Mono-OFL.txt
+          cp docs/THIRD-PARTY-LICENSES.txt package/licenses/
           tar -czf "screencue-${{ matrix.artifact }}.tar.gz" -C package .
       - name: Upload build artifact
         uses: actions/upload-artifact@v7

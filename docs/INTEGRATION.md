@@ -6,7 +6,7 @@ The intended interaction is short: the user asks where to click, the agent calls
 
 ## Install and connect
 
-Download the matching binary archive from [ScreenCue Releases](https://github.com/CrioNIK/ScreenCue/releases), extract it to a permanent location, and run `screencue demo` there (`.\screencue.exe demo` in Windows PowerShell). Keep the included licenses. macOS/Linux may need `chmod +x ./screencue`. Before the first release is published, use the build artifacts in [GitHub Actions](https://github.com/CrioNIK/ScreenCue/actions) or build from source.
+Download the matching binary archive from [ScreenCue Releases](https://github.com/CrioNIK/ScreenCue/releases), extract it to a permanent location, and run `screencue demo` there (`.\screencue.exe demo` in Windows PowerShell). Keep the included licenses. macOS/Linux may need `chmod +x ./screencue`.
 
 The following commands register a user-level local server. They write client configuration; run the command for the client you use. Replace the executable path with your installation path. On macOS/Linux, substitute `/absolute/path/screencue`.
 

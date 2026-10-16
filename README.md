@@ -40,7 +40,7 @@ ScreenCue работает с агентами разных поставщико
 2. Распакуйте его в постоянную папку, например `C:\Tools\ScreenCue` на Windows. На macOS/Linux используйте папку в своём домашнем каталоге и выполните `chmod +x ./screencue`, если файл не отмечен как исполняемый.
 3. Проверьте `demo`, затем один раз [подключите агента](#подключение-агента). Для обычной работы терминал больше не нужен: клиент сам запускает ScreenCue.
 
-В архиве лежит `screencue` (`screencue.exe` на Windows) и лицензии. Для запуска Rust, Node.js и .NET не нужны. До публикации первого релиза сборки доступны в [GitHub Actions](https://github.com/CrioNIK/ScreenCue/actions) или через сборку из исходников ниже.
+В архиве лежит `screencue` (`screencue.exe` на Windows) и лицензии. Для запуска Rust, Node.js и .NET не нужны.
 
 ```powershell
 # Windows PowerShell, из папки с программой
