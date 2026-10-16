@@ -15,15 +15,29 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: windows
+            artifact: windows-x64
             binary: screencue.exe
+            target: x86_64-pc-windows-msvc
+            rustflags: -C target-feature=+crt-static
           - os: macos-latest
-            artifact: macos
+            artifact: macos-apple-silicon
             binary: screencue
+            target: aarch64-apple-darwin
+            rustflags: ''
+          - os: macos-latest
+            artifact: macos-intel
+            binary: screencue
+            target: x86_64-apple-darwin
+            rustflags: ''
           - os: ubuntu-latest
-            artifact: linux-x11
+            artifact: linux-x64-x11
             binary: screencue
+            target: x86_64-unknown-linux-gnu
+            rustflags: ''
     runs-on: ${{ matrix.os }}
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+      MACOSX_DEPLOYMENT_TARGET: '12.3'
     defaults:
       run:
         shell: bash
@@ -37,20 +51,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y libx11-dev libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libxrandr-dev
       - name: Install Rust
-        run: rustup toolchain install stable --profile minimal --component rustfmt
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup target add --toolchain stable "${{ matrix.target }}"
       - name: Check formatting
         run: cargo +stable fmt --check
       - name: Unit tests
         run: cargo +stable test --locked
       - name: Release build
-        run: cargo +stable build --release --locked
+        run: cargo +stable build --release --target "${{ matrix.target }}" --locked
       - name: Package binary and licenses
         run: |
           mkdir -p package/licenses
-          cp "target/release/${{ matrix.binary }}" package/
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" package/
           cp LICENSE package/
+          cp docs/QUICKSTART.md package/README.md
           cp assets/OFL.txt package/licenses/IBM-Plex-Mono-OFL.txt
-          cp README.md package/
           tar -czf "screencue-${{ matrix.artifact }}.tar.gz" -C package .
       - name: Upload build artifact
         uses: actions/upload-artifact@v7

@@ -10,16 +10,28 @@ const MAX_LINE_BYTES: usize = 32_768;
 const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 const LATEST_HANDSHAKE_VERSION: &str = "2025-11-25";
 
-const INSTRUCTIONS: &str = "ScreenCue draws temporary click-through hints over the desktop. \
+const INSTRUCTIONS: &str = "ScreenCue draws persistent click-through hints over the desktop without taking focus. \
 It does not provide screenshots, identify controls, click, type, or control other apps. \
-Auto color may sample a small local pixel region once per hint where the platform permits it; \
+Auto color may sample a small local pixel region on show and about once per second while visible where the platform permits it; \
 pixels are transient and are never saved or transmitted. Before placing a hint, obtain a fresh \
 screen observation using your own permitted screen tools. Call screen_displays to inspect \
 physical desktop bounds. Coordinates use physical desktop pixels, not browser CSS pixels. \
 Map screenshot coordinates using that screenshot's captured desktop origin and physical \
 dimensions; do not guess a scaling factor. Negative desktop coordinates are valid. \
 Arrow and target outline are independent; target shapes include ellipse, rectangle, rounded \
-rectangle, and polygon. Use screen_clear when a hint is no longer relevant. \
+rectangle, and polygon. For a pointing request, call screen_hint promptly for one step, \
+with an empty label or a few words, and keep any accompanying explanation brief. \
+Leave the current application in front and let the user click. Hints stay visible by default \
+through clicks and window changes. Use screen_clear when the user finishes the step or the \
+hint is no longer relevant; a new hint replaces it. Do not set duration_ms unless the user \
+or task explicitly needs expiry. The configured hide shortcut also clears the hint. \
+Closing the MCP connection ends its process and removes its hint. \
+By default ScreenCue follows the native application window under the target locally, without another model call. \
+This follows window movement and DPI, not scrolling or controls rearranging inside the window. \
+After scrolling or UI layout changes obtain a fresh observation and replace the hint. \
+Inspect tracking.state in screen_status: needs_refresh means a window resize invalidated the target. \
+Offscreen, minimized and closed windows retain a labelled edge indicator. \
+Set follow_window=false only for fixed desktop coordinates. \
 Availability of global overlays and automatic color sampling depends on the operating system \
 and display server; inspect status errors instead of assuming support.";
 
@@ -292,23 +304,26 @@ pub fn tool_definitions() -> Value {
     json!([
         {
             "name": "screen_hint",
-            "description": "Draw a desktop hint with an independent arrow, target outline, and instruction, replacing the previous hint. Obtain a fresh screen observation first and map screenshot coordinates to physical desktop pixels using its capture origin and scale. This tool does not provide screenshots, identify controls, or click. Auto color may sample local pixels once per hint without saving or transmitting them. Box style requires width and height; polygon shape requires points and an interior x/y anchor.",
+            "description": "Draw one click-through desktop hint without taking focus, replacing the previous hint. Returns promptly; the cue stays visible by default through clicks and window changes until screen_clear, replacement, the hide shortcut, or process shutdown. Prefer an empty label or a few words, then let the user act. Obtain a fresh screen observation first and map screenshot coordinates to physical desktop pixels using its capture origin and scale. This tool does not provide screenshots, identify controls, or click. Auto color may sample local pixels about once per second while visible, without saving or transmitting them. Box style requires width and height; polygon shape requires points and an interior x/y anchor. Check shortcut_active and shortcut_error in the result.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "x": {"type": "integer", "minimum": i32::MIN, "maximum": i32::MAX, "description": "Physical desktop x: target center for arrow style, top-left for box style, or interior anchor for polygon. May be negative."},
                     "y": {"type": "integer", "minimum": i32::MIN, "maximum": i32::MAX, "description": "Physical desktop y: target center for arrow style, top-left for box style, or interior anchor for polygon. May be negative."},
                     "text": {"type": "string", "maxLength": 500, "default": "Click here", "description": "Short instruction beside the target. Empty string hides the text card."},
+                    "animate": {"type":"boolean","default":true,"description":"The four-frame SKETCH arrow advances at 5 steps per second; the light target contour animates at about 12 frames per second. False freezes both."},
+                    "follow_window": {"type":"boolean","default":true,"description":"Locally follow the original app window under the target. Movement is tracked without another agent call; offscreen/minimized targets keep a labelled screen-edge cue. Does not follow scrolling or rearranged controls: refresh the hint after UI changes. False fixes desktop coordinates."},
                     "background_colors": {"type":"array","maxItems":16,"items":{"type":"string","pattern":"^#[0-9A-Fa-f]{6}$"},"description":"Optional representative colors from a fresh screenshot around the target, including repeated common colors. Auto color uses this palette without local pixel sampling; useful on macOS."},
                     "style": {"type": "string", "enum": ["arrow", "box"], "default": "arrow"},
-                    "color": {"type": "string", "pattern": "^(auto|#[0-9A-Fa-f]{6})$", "minLength": 4, "maxLength": 7, "default": "auto", "description": "auto samples a small local pixel region once per hint where supported, without saving or transmitting pixels. Or provide exact #RRGGBB."},
+                    "color": {"type": "string", "pattern": "^(auto|#[0-9A-Fa-f]{6})$", "minLength": 4, "maxLength": 7, "default": "auto", "description": "auto samples a small local pixel region about once per second while visible where supported, without saving or transmitting pixels. Or provide exact #RRGGBB."},
                     "shape": {"type": "string", "enum": ["ellipse", "rectangle", "rounded", "polygon"], "description": "Independent target shape. Default ellipse for arrow style, rectangle for box style. Polygon requires points and x/y inside it."},
                     "arrow": {"type": "boolean", "description": "Show the arrow independently. Default true for arrow style, false for box style."},
+                    "arrow_scale": {"type": "number", "minimum": 0.75, "maximum": 2.5, "default": 1.6, "description": "Arrow length and swept head size, independent of target size. Default 1.6 gives a larger, bolder curved arrow; the target outline stays lighter and its separation gap stays unchanged. Length may be constrained by available screen space."},
                     "target": {"type": "boolean", "default": true, "description": "Show the target outline independently of the arrow."},
                     "points": {"type": "array", "minItems": 3, "maxItems": 64, "items": {"type": "object", "properties": {"x": coordinate, "y": coordinate}, "required": ["x", "y"], "additionalProperties": false}, "description": "Polygon vertices in boundary order, in absolute physical desktop pixels. Requires shape polygon; the x/y anchor must lie inside."},
                     "width": {"type": "integer", "minimum": 1, "maximum": 4000, "description": "Target width in physical pixels. Required for box style; default 16 for arrow style."},
                     "height": {"type": "integer", "minimum": 1, "maximum": 4000, "description": "Target height in physical pixels. Required for box style; default 16 for arrow style."},
-                    "duration_ms": {"type": "integer", "default": 15000, "anyOf": [{"const": 0}, {"minimum": 500, "maximum": 300000}], "description": "Visible duration: 500..300000 ms, or 0 until replaced or cleared."},
+                    "duration_ms": {"type": "integer", "default": 0, "anyOf": [{"const": 0}, {"minimum": 500, "maximum": 300000}], "description": "Default 0: stays until the agent clears/replaces it, the user presses the hide shortcut, or the process exits. Clicks and window changes do not dismiss it. Set 500..300000 only when timed expiry is explicitly needed."},
                     "step": {"type": "integer", "minimum": 1, "maximum": 99, "description": "Optional numbered instruction badge."}
                 },
                 "required": ["x", "y"],
@@ -416,13 +431,14 @@ mod tests {
                 .unwrap();
             Ok(())
         };
-        let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"screen_hint","arguments":{"x":1,"y":2,"text":"世界 😀","arrow":false,"color":"#aBc123"}}});
+        let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"screen_hint","arguments":{"x":1,"y":2,"text":"世界 😀","arrow":false,"arrow_scale":1.6,"color":"#aBc123"}}});
         let response = handle_message(request.clone(), &mut true, &send, REPLY_TIMEOUT).unwrap();
         assert_eq!(response["result"]["isError"], false);
         let forwarded = observed.lock().unwrap();
         assert_eq!(forwarded["command"], "show");
         assert_eq!(forwarded["text"], "世界 😀");
         assert_eq!(forwarded["arrow"], false);
+        assert_eq!(forwarded["arrow_scale"], 1.6);
         assert_eq!(forwarded["color"], "#aBc123");
         let response = handle_message(
             request,
@@ -436,6 +452,28 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("UI unavailable"));
+    }
+
+    #[test]
+    fn arrow_scale_schema_matches_model_range() {
+        let definitions = tool_definitions();
+        let schema = &definitions[0]["inputSchema"]["properties"]["arrow_scale"];
+        assert_eq!(schema["type"], "number");
+        assert_eq!(schema["minimum"], 0.75);
+        assert_eq!(schema["maximum"], 2.5);
+        assert_eq!(schema["default"], 1.6);
+    }
+
+    #[test]
+    fn duration_schema_matches_persistent_model_default() {
+        let definitions = tool_definitions();
+        let schema = &definitions[0]["inputSchema"]["properties"]["duration_ms"];
+        let hint = crate::model::Hint::parse(json!({"x":100,"y":100})).unwrap();
+        assert_eq!(schema["default"], hint.duration_ms);
+        assert_eq!(schema["default"], 0);
+        assert_eq!(schema["anyOf"][0]["const"], 0);
+        assert_eq!(schema["anyOf"][1]["minimum"], 500);
+        assert_eq!(schema["anyOf"][1]["maximum"], 300000);
     }
 
     #[test]

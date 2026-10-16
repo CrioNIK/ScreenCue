@@ -46,13 +46,16 @@ fn default_color() -> String {
     "auto".into()
 }
 fn default_duration() -> u64 {
-    15000
+    0
 }
 fn yes() -> bool {
     true
 }
 fn one() -> u32 {
     1
+}
+fn default_arrow_scale() -> f32 {
+    1.6
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -80,8 +83,15 @@ pub struct Hint {
     pub background_colors: Vec<String>,
     #[serde(default)]
     pub arrow: Option<bool>,
+    #[serde(default = "default_arrow_scale")]
+    pub arrow_scale: f32,
     #[serde(default = "yes")]
     pub target: bool,
+    #[serde(default = "yes")]
+    pub animate: bool,
+    /// Follow the native app window under the target without another agent call.
+    #[serde(default = "yes")]
+    pub follow_window: bool,
     #[serde(default)]
     pub points: Vec<Point>,
 }
@@ -105,6 +115,9 @@ impl Hint {
         }
         if !(1..=99).contains(&hint.step) {
             return Err("step must be 1..99".into());
+        }
+        if !hint.arrow_scale.is_finite() || !(0.75..=2.5).contains(&hint.arrow_scale) {
+            return Err("arrow_scale must be a number between 0.75 and 2.5".into());
         }
         for size in [hint.width, hint.height].into_iter().flatten() {
             if !(1..=4000).contains(&size) {
@@ -261,5 +274,34 @@ mod tests {
         let h=Hint::parse(json!({"x":50,"y":50,"shape":"polygon","points":[{"x":0,"y":0},{"x":100,"y":0},{"x":100,"y":100},{"x":0,"y":100}]})).unwrap();
         assert!(h.contains(10., 10.));
         assert!(!h.contains(150., 10.));
+    }
+    #[test]
+    fn arrow_scale_defaults_and_limits() {
+        let default = Hint::parse(json!({"x":100,"y":100})).unwrap();
+        assert_eq!(default.arrow_scale, 1.6);
+        for scale in [0.75, 1.0, 1.3, 1.6, 2.5] {
+            assert!(Hint::parse(json!({"x":100,"y":100,"arrow_scale":scale})).is_ok());
+        }
+        for scale in [
+            json!(0.74),
+            json!(2.51),
+            json!(-1),
+            json!("1.3"),
+            Value::Null,
+        ] {
+            assert!(Hint::parse(json!({"x":100,"y":100,"arrow_scale":scale})).is_err());
+        }
+    }
+    #[test]
+    fn hints_persist_by_default_and_expiry_is_explicit() {
+        let hint = Hint::parse(json!({"x":100,"y":100})).unwrap();
+        assert_eq!(hint.duration_ms, 0);
+        for duration in [0, 500, 15000, 300000] {
+            let hint = Hint::parse(json!({"x":100,"y":100,"duration_ms":duration})).unwrap();
+            assert_eq!(hint.duration_ms, duration);
+        }
+        for duration in [json!(1), json!(499), json!(300001), json!(-1), json!(1.5)] {
+            assert!(Hint::parse(json!({"x":100,"y":100,"duration_ms":duration})).is_err());
+        }
     }
 }

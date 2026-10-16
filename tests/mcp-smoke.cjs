@@ -69,6 +69,9 @@ class McpClient {
   }
   notify(method, params) { this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n'); }
   async tool(name, args = {}) {
+    // Live protocol cases keep fixed desktop coordinates; native tracking is
+    // tested separately with an owned window in windows-native.ps1.
+    if (name === 'screen_hint' && !Object.hasOwn(args, 'follow_window')) args = { ...args, follow_window: false };
     const response = await this.request('tools/call', { name, arguments: args });
     assert.ok(!response.error, JSON.stringify(response));
     assert.equal(response.result.content.length, 1);
@@ -111,7 +114,9 @@ async function main() {
     const listed = (await client.request('tools/list')).result.tools;
     assert.deepEqual(listed.map(tool => tool.name).sort(), ['screen_clear', 'screen_displays', 'screen_hint', 'screen_status']);
     const hintSchema = listed.find(tool => tool.name === 'screen_hint').inputSchema;
-    assert.equal(hintSchema.properties.duration_ms.default, 15000);
+    assert.equal(hintSchema.properties.duration_ms.default, 0);
+    assert.equal(hintSchema.properties.follow_window.default, true);
+    assert.equal(hintSchema.properties.follow_window.type, 'boolean');
     assert.equal(hintSchema.additionalProperties, false);
     assert.equal(hintSchema.properties.color.default, 'auto');
     assert.equal(hintSchema.properties.arrow.type, 'boolean');
@@ -162,7 +167,7 @@ async function main() {
       assert.equal(shown.data.visible, true);
       const { data: status } = await client.tool('screen_status');
       assert.equal(status.hint.text, text);
-      assert.equal(status.hint.duration_ms, 15000);
+      assert.equal(status.hint.duration_ms, 0);
       const offscreen = await client.tool('screen_hint', { x: -100000, y: -100000, text: 'Outside' });
       assert.equal(offscreen.result.isError, true);
       assert.equal(offscreen.data.ok, false);
