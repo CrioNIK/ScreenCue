@@ -6,7 +6,8 @@ use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};
 use fontdue::{Font, FontSettings};
 use std::cell::RefCell;
 use tiny_skia::{
-    FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, PixmapPaint, Stroke, Transform,
+    FilterQuality, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, PixmapPaint, Stroke,
+    Transform,
 };
 
 #[path = "sketch.rs"]
@@ -21,9 +22,20 @@ pub struct Frame {
     pub arrow_tip: Option<(f32, f32)>,
     /// Fixed shaft start in physical desktop coordinates, for local contrast sampling.
     pub arrow_start: Option<(f32, f32)>,
+    pub panel: Option<PanelInfo>,
     // Includes every arrow frame, even when an asynchronous screenshot contains
     // an earlier animation phase. Shared source pixels avoid per-frame rasters.
     arrow_sampling_mask: Option<sketch::SamplingMask>,
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub struct PanelInfo {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub page: u32,
+    pub page_count: u32,
 }
 
 impl Frame {
@@ -41,6 +53,16 @@ impl Frame {
             .arrow_start
             .map(|(x, y)| (x + dx as f32, y + dy as f32));
         self.arrow_tip = self.arrow_tip.map(|(x, y)| (x + dx as f32, y + dy as f32));
+        if let Some(panel) = &mut self.panel {
+            panel.x = panel
+                .x
+                .checked_add(dx)
+                .ok_or("Panel translation overflow")?;
+            panel.y = panel
+                .y
+                .checked_add(dy)
+                .ok_or("Panel translation overflow")?;
+        }
         Ok(())
     }
 
@@ -78,27 +100,40 @@ impl Frame {
 }
 
 pub struct Renderer {
-    font: Font,
+    card_assets: RefCell<Option<CardAssets>>,
     card_cache: RefCell<Option<CachedCard>>,
     sketch_cache: RefCell<Option<Sketch>>,
 }
 
+struct CardAssets {
+    fonts: [Font; 2],
+    brush: Vec<Pixmap>,
+}
+
+struct CardPage {
+    start: usize,
+    end: usize,
+    top: f32,
+    width: f32,
+    height: f32,
+}
+
 struct CachedCard {
+    title: String,
     text: String,
     scale: f32,
     max_width: f32,
+    max_height: f32,
+    layout: Layout,
+    pages: Vec<CardPage>,
+    page: usize,
     pixmap: Pixmap,
 }
 
 impl Renderer {
     pub fn new() -> Result<Self, String> {
-        let font = Font::from_bytes(
-            include_bytes!("../assets/IBMPlexMono-Regular.ttf") as &[u8],
-            FontSettings::default(),
-        )
-        .map_err(|error| format!("Cannot load bundled font: {error}"))?;
         Ok(Self {
-            font,
+            card_assets: RefCell::new(None),
             card_cache: RefCell::new(None),
             sketch_cache: RefCell::new(None),
         })
@@ -137,38 +172,76 @@ impl Renderer {
         let target = hint.bounds();
         let anchor = hint.anchor();
         let margin = 4.0 * scale;
-        let padding = 9.0 * scale;
-        let label = if hint.step > 1 {
+        let title = if hint.step > 1 && !hint.title.is_empty() {
+            format!("{} · {}", hint.step, hint.title)
+        } else {
+            hint.title.clone()
+        };
+        let label = if hint.step > 1 && hint.title.is_empty() {
             format!("{} · {}", hint.step, hint.text)
         } else {
             hint.text.clone()
         };
-        let card = if hint.text.is_empty() {
+        let mut panel = None;
+        let card = if hint.text.is_empty() && hint.title.is_empty() {
             None
         } else {
-            let max_width = (280.0 * scale).min(monitor.w - 2.0 * margin) - 2.0 * padding;
-            if max_width < 13.0 * scale {
+            let preferred = hint.panel_width.map_or(340.0 * scale, |width| width as f32);
+            let max_width = (preferred
+                .max(140.0 * scale)
+                .min((monitor.w - 2.0 * margin).floor())
+                - 64.0 * scale)
+                .floor();
+            if max_width < 24.0 * scale {
                 return Err("Display is too narrow for the instruction".into());
             }
-            let (width, height) = self.prepare_card(&label, max_width, scale)?;
-            if height > monitor.h - 2.0 * margin {
-                return Err(
-                    "Instruction is too tall for the display; shorten it or remove line breaks"
-                        .into(),
-                );
+            let mut max_height = (360.0 * scale).min(monitor.h - 2.0 * margin).floor();
+            if hint.panel_x.is_none() && (hint.target || hint.has_arrow()) {
+                let vertical_room = (target.y - monitor.y - 22.0 * scale)
+                    .max(monitor.bottom() - target.bottom() - 22.0 * scale)
+                    .floor();
+                if vertical_room >= 76.0 * scale {
+                    max_height = max_height.min(vertical_room);
+                }
             }
-            Some(place_card(
-                target,
-                monitor,
-                width,
-                height,
-                scale,
-                if hint.has_arrow() {
-                    hint.arrow_scale
-                } else {
-                    1.0
-                },
-            ))
+            let (width, height, page, page_count) =
+                self.prepare_card(&title, &label, max_width, max_height, scale, hint.text_page)?;
+            let placed = if let (Some(x), Some(y)) = (hint.panel_x, hint.panel_y) {
+                Rect {
+                    x: (x as f32).clamp(
+                        monitor.x + margin,
+                        (monitor.right() - margin - width).max(monitor.x + margin),
+                    ),
+                    y: (y as f32).clamp(
+                        monitor.y + margin,
+                        (monitor.bottom() - margin - height).max(monitor.y + margin),
+                    ),
+                    w: width,
+                    h: height,
+                }
+            } else {
+                place_card(
+                    target,
+                    monitor,
+                    width,
+                    height,
+                    scale,
+                    if hint.has_arrow() {
+                        hint.arrow_scale
+                    } else {
+                        1.0
+                    },
+                )
+            };
+            panel = Some(PanelInfo {
+                x: placed.x.round() as i32,
+                y: placed.y.round() as i32,
+                width: width as u32,
+                height: height as u32,
+                page,
+                page_count,
+            });
+            Some(placed)
         };
 
         let desired_arrow = if hint.has_arrow() {
@@ -184,7 +257,23 @@ impl Renderer {
             }
             let sketch = sketches.as_mut().expect("sketch loaded above");
             sketch.tint(color);
-            fit_arrow(arrow, sketch, monitor, card, scale, hint.arrow_scale)
+            let mut best = fit_arrow(arrow, sketch, monitor, card, scale, hint.arrow_scale);
+            let length =
+                |arrow: Arrow| (arrow.start.0 - arrow.tip.0).hypot(arrow.start.1 - arrow.tip.1);
+            if card.is_some() && best.is_none_or(|fitted| length(fitted) + 0.1 < length(arrow)) {
+                for direction in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+                    if let Some(candidate) = make_arrow_on_side(hint, monitor, scale, direction)
+                        .and_then(|candidate| {
+                            fit_arrow(candidate, sketch, monitor, card, scale, hint.arrow_scale)
+                        })
+                    {
+                        if best.is_none_or(|current| length(candidate) > length(current) + 0.1) {
+                            best = Some(candidate);
+                        }
+                    }
+                }
+            }
+            best
         } else {
             None
         };
@@ -269,76 +358,320 @@ impl Renderer {
             y,
             arrow_tip: arrow.map(|arrow| arrow.tip),
             arrow_start: arrow.map(|arrow| arrow.start),
+            panel,
             arrow_sampling_mask,
         })
     }
 
     /// Cache one complete text card. Animation does not repeat text layout,
     /// font rasterization, or card painting; it only composites this bitmap.
-    fn prepare_card(&self, text: &str, max_width: f32, scale: f32) -> Result<(f32, f32), String> {
+    fn prepare_card(
+        &self,
+        title: &str,
+        text: &str,
+        max_width: f32,
+        max_height: f32,
+        scale: f32,
+        requested_page: u32,
+    ) -> Result<(f32, f32, u32, u32), String> {
         let mut cache = self.card_cache.borrow_mut();
-        if let Some(card) = cache.as_ref() {
-            if card.text == text && card.scale == scale && card.max_width == max_width {
-                return Ok((card.pixmap.width() as f32, card.pixmap.height() as f32));
+        let changed = cache.as_ref().is_none_or(|card| {
+            card.title != title
+                || card.text != text
+                || card.scale != scale
+                || card.max_width != max_width
+                || card.max_height != max_height
+        });
+        if !changed {
+            let card = cache.as_ref().unwrap();
+            let page = (requested_page as usize).min(card.pages.len() - 1);
+            if card.page == page {
+                return Ok((
+                    card.pixmap.width() as f32,
+                    card.pixmap.height() as f32,
+                    page as u32,
+                    card.pages.len() as u32,
+                ));
             }
         }
-        let padding = 9.0 * scale;
-        let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
-        layout.reset(&LayoutSettings {
-            max_width: Some(max_width),
-            line_height: 1.12,
-            ..LayoutSettings::default()
-        });
-        layout.append(&[&self.font], &TextStyle::new(text, 13.0 * scale, 0));
-        let text_width = layout
+        let mut assets = self.card_assets.borrow_mut();
+        if assets.is_none() {
+            let load = |bytes| {
+                Font::from_bytes(bytes, FontSettings::default())
+                    .map_err(|error| format!("Cannot load bundled sans font: {error}"))
+            };
+            *assets = Some(CardAssets {
+                fonts: [
+                    load(include_bytes!("../assets/IBMPlexSans-Regular.ttf") as &[u8])?,
+                    load(include_bytes!("../assets/IBMPlexSans-Bold.ttf") as &[u8])?,
+                ],
+                brush: load_panel_brush()?,
+            });
+        }
+        let assets = assets.as_ref().unwrap();
+        if changed {
+            let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
+            layout.reset(&LayoutSettings {
+                max_width: Some(max_width),
+                line_height: 1.2,
+                ..LayoutSettings::default()
+            });
+            if !title.is_empty() {
+                layout.append(&assets.fonts, &TextStyle::new(title, 19.0 * scale, 1));
+                if !text.is_empty() {
+                    layout.append(&assets.fonts, &TextStyle::new("\n", 19.0 * scale, 1));
+                }
+            }
+            if !text.is_empty() {
+                layout.append(&assets.fonts, &TextStyle::new(text, 15.5 * scale, 0));
+            }
+            let content_height = max_height - 32.0 * scale - 1.0;
+            let mut pages = paginate(&layout, content_height)?;
+            if pages.len() > 1 {
+                pages = paginate(&layout, content_height - 20.0 * scale)?;
+            }
+            *cache = Some(CachedCard {
+                title: title.into(),
+                text: text.into(),
+                scale,
+                max_width,
+                max_height,
+                layout,
+                pages,
+                page: usize::MAX,
+                pixmap: Pixmap::new(1, 1).unwrap(),
+            });
+        }
+        let card = cache.as_mut().unwrap();
+        let page_index = (requested_page as usize).min(card.pages.len() - 1);
+        let page = &card.pages[page_index];
+        let footer_height = if card.pages.len() > 1 {
+            20.0 * scale
+        } else {
+            0.0
+        };
+        let mut footer = Layout::new(CoordinateSystem::PositiveYDown);
+        if card.pages.len() > 1 {
+            footer.append(
+                &assets.fonts,
+                &TextStyle::new(
+                    &format!("{} / {}", page_index + 1, card.pages.len()),
+                    11.5 * scale,
+                    0,
+                ),
+            );
+        }
+        let footer_width = footer
             .glyphs()
             .iter()
             .map(|glyph| glyph.x + glyph.width as f32)
-            .fold(0.0, f32::max)
-            .ceil();
-        let width = (text_width.max(1.0).min(max_width) + 2.0 * padding).ceil() as u32;
-        let height = (layout.height().max(13.0 * scale).ceil() + 2.0 * padding).ceil() as u32;
+            .fold(0.0, f32::max);
+        let width = (page
+            .width
+            .max(footer_width)
+            .max(56.0 * scale)
+            .min(max_width)
+            + 64.0 * scale)
+            .ceil() as u32;
+        let height = (page.height.max(19.0 * scale) + 32.0 * scale + footer_height).ceil() as u32;
         if width > 8192 || height > 8192 || width as u64 * height as u64 > 8_000_000 {
             return Err("Instruction card exceeds supported dimensions".into());
         }
         let mut pixmap = Pixmap::new(width, height).ok_or("Cannot allocate text card")?;
-        let path = rounded_rect(
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                w: width as f32,
-                h: height as f32,
-            },
-            7.0 * scale,
-        )?;
-        let mut background = Paint::default();
-        background.set_color_rgba8(20, 23, 29, 231);
-        background.anti_alias = true;
-        pixmap.fill_path(
-            &path,
-            &background,
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
-        for glyph in layout.glyphs() {
-            let (metrics, coverage) = self.font.rasterize_config(glyph.key);
+        paint_panel_background(&mut pixmap, &assets.brush, scale);
+        paint_panel_accent(&mut pixmap, scale);
+        for glyph in &card.layout.glyphs()[page.start..page.end] {
+            // Layout retains line breaks and spacing for pagination, but they
+            // have no ink. Rasterizing their missing font glyph draws boxes.
+            if glyph.parent.is_whitespace() || glyph.parent.is_control() {
+                continue;
+            }
+            let (metrics, coverage) = assets.fonts[glyph.font_index].rasterize_config(glyph.key);
             blend_glyph(
                 &mut pixmap,
-                (padding + glyph.x).round() as i32,
-                (padding + glyph.y).round() as i32,
+                (40.0 * scale + glyph.x).round() as i32,
+                (16.0 * scale + glyph.y - page.top).round() as i32,
                 metrics.width,
                 metrics.height,
                 &coverage,
             );
         }
-        *cache = Some(CachedCard {
-            text: text.to_owned(),
-            scale,
-            max_width,
-            pixmap,
-        });
-        Ok((width as f32, height as f32))
+        if card.pages.len() > 1 {
+            for glyph in footer.glyphs() {
+                let (metrics, coverage) = assets.fonts[0].rasterize_config(glyph.key);
+                blend_glyph(
+                    &mut pixmap,
+                    (40.0 * scale + glyph.x).round() as i32,
+                    (height as f32 - 29.0 * scale + glyph.y).round() as i32,
+                    metrics.width,
+                    metrics.height,
+                    &coverage,
+                );
+            }
+        }
+        card.pixmap = pixmap;
+        card.page = page_index;
+        Ok((
+            width as f32,
+            height as f32,
+            page_index as u32,
+            card.pages.len() as u32,
+        ))
+    }
+}
+
+fn load_panel_brush() -> Result<Vec<Pixmap>, String> {
+    let source = Pixmap::decode_png(include_bytes!("../assets/panel-brush.png"))
+        .map_err(|error| format!("Cannot load panel brush: {error}"))?;
+    let x = [
+        0,
+        source.width() * 18 / 100,
+        source.width() * 82 / 100,
+        source.width(),
+    ];
+    let y = [
+        0,
+        source.height() * 24 / 100,
+        source.height() * 76 / 100,
+        source.height(),
+    ];
+    let mut slices = Vec::with_capacity(9);
+    for row in 0..3 {
+        for column in 0..3 {
+            let rect = tiny_skia::IntRect::from_xywh(
+                x[column] as i32,
+                y[row] as i32,
+                x[column + 1] - x[column],
+                y[row + 1] - y[row],
+            )
+            .ok_or("Invalid panel brush dimensions")?;
+            slices.push(
+                source
+                    .clone_rect(rect)
+                    .ok_or("Cannot prepare panel brush slice")?,
+            );
+        }
+    }
+    Ok(slices)
+}
+
+fn paint_panel_background(pixmap: &mut Pixmap, slices: &[Pixmap], scale: f32) {
+    // Fixed-width brush edges surround a stretchable reading area. Tall pages
+    // never stretch a transparent brush fringe underneath their first lines.
+    let edge_x = (24.0 * scale).ceil();
+    let edge_y = (14.0 * scale).ceil();
+    let x = [
+        0.0,
+        edge_x,
+        pixmap.width() as f32 - edge_x,
+        pixmap.width() as f32,
+    ];
+    let y = [
+        0.0,
+        edge_y,
+        pixmap.height() as f32 - edge_y,
+        pixmap.height() as f32,
+    ];
+    let mut backing = Paint::default();
+    backing.set_color_rgba8(14, 14, 14, 255);
+    if let Some(rect) = tiny_skia::Rect::from_ltrb(x[1], y[1], x[2], y[2]) {
+        pixmap.fill_rect(rect, &backing, Transform::identity(), None);
+    }
+    for row in 0..3 {
+        for column in 0..3 {
+            let slice = &slices[row * 3 + column];
+            let transform = Transform::from_row(
+                (x[column + 1] - x[column]) / slice.width() as f32,
+                0.0,
+                0.0,
+                (y[row + 1] - y[row]) / slice.height() as f32,
+                x[column],
+                y[row],
+            );
+            pixmap.draw_pixmap(
+                0,
+                0,
+                slice.as_ref(),
+                &PixmapPaint {
+                    quality: FilterQuality::Bilinear,
+                    ..PixmapPaint::default()
+                },
+                transform,
+                None,
+            );
+        }
+    }
+}
+
+fn paginate(layout: &Layout, available_height: f32) -> Result<Vec<CardPage>, String> {
+    let lines = layout.lines().ok_or("Instruction has no text lines")?;
+    let glyphs = layout.glyphs();
+    let mut pages = Vec::<CardPage>::new();
+    for line in lines {
+        let top = line.baseline_y - line.max_ascent;
+        let bottom = line.baseline_y - line.min_descent;
+        if bottom - top > available_height || available_height <= 0.0 {
+            return Err("Display is too short for readable instruction text".into());
+        }
+        let start = line.glyph_start.min(glyphs.len());
+        let end = (line.glyph_end + 1).min(glyphs.len());
+        let width = glyphs[start..end]
+            .iter()
+            .map(|glyph| glyph.x + glyph.width as f32)
+            .fold(0.0, f32::max);
+        if pages
+            .last()
+            .is_none_or(|page| bottom - page.top > available_height)
+        {
+            pages.push(CardPage {
+                start,
+                end,
+                top,
+                width,
+                height: bottom - top,
+            });
+        } else {
+            let page = pages.last_mut().unwrap();
+            page.end = end;
+            page.width = page.width.max(width);
+            page.height = bottom - page.top;
+        }
+    }
+    if pages.is_empty() {
+        return Err("Instruction has no text lines".into());
+    }
+    Ok(pages)
+}
+
+fn paint_panel_accent(pixmap: &mut Pixmap, scale: f32) {
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(239, 35, 45, 255);
+    paint.anti_alias = true;
+    let bottom = pixmap.height() as f32 - 14.0 * scale;
+    for (offset, width, inset) in [(-2.1, 0.8, 3.0), (0.0, 3.4, 0.0), (2.0, 1.0, 5.0)] {
+        let mut path = PathBuilder::new();
+        path.move_to((26.0 + offset) * scale, (14.0 + inset) * scale);
+        path.cubic_to(
+            (25.0 + offset) * scale,
+            bottom * 0.4,
+            (22.8 + offset) * scale,
+            bottom * 0.7,
+            (22.0 + offset) * scale,
+            bottom - inset * scale,
+        );
+        if let Some(path) = path.finish() {
+            pixmap.stroke_path(
+                &path,
+                &paint,
+                &Stroke {
+                    width: width * scale,
+                    line_cap: LineCap::Butt,
+                    ..Stroke::default()
+                },
+                Transform::identity(),
+                None,
+            );
+        }
     }
 }
 
@@ -451,7 +784,7 @@ fn fit_arrow(
             }
         }
         if let Some(card) = card {
-            let padding = 2.0 * scale;
+            let padding = 12.0 * scale;
             let avoid = Rect {
                 x: card.x - padding,
                 y: card.y - padding,
@@ -496,37 +829,30 @@ fn fit_arrow(
     best
 }
 
-fn make_arrow(hint: &Hint, monitor: Rect, card: Option<Rect>, scale: f32) -> Option<Arrow> {
+fn make_arrow(hint: &Hint, monitor: Rect, _card: Option<Rect>, scale: f32) -> Option<Arrow> {
+    let anchor = hint.anchor();
+    // The arrow points from available screen space, independently of the
+    // text panel. The fitting pass reserves a gap around the panel.
+    let directions = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)];
+    let direction = directions.into_iter().max_by(|a, b| {
+        let room =
+            |d: (f32, f32)| ray_rect_distance(anchor, d, monitor) - contour_distance(hint, d);
+        room(*a).total_cmp(&room(*b))
+    })?;
+    make_arrow_on_side(hint, monitor, scale, direction)
+}
+
+fn make_arrow_on_side(
+    hint: &Hint,
+    monitor: Rect,
+    scale: f32,
+    direction: (f32, f32),
+) -> Option<Arrow> {
     let anchor = hint.anchor();
     let geometry_scale = scale * hint.arrow_scale;
-    let (direction, start_distance) = if let Some(card) = card {
-        let center = (card.x + card.w / 2.0, card.y + card.h / 2.0);
-        let dx = center.0 - anchor.0;
-        let dy = center.1 - anchor.1;
-        let length = dx.hypot(dy);
-        if length < 1.0 {
-            return None;
-        }
-        let direction = (dx / length, dy / length);
-        let from_center = ray_rect_distance(center, (-direction.0, -direction.1), card);
-        (
-            direction,
-            length - from_center - 4.0 * scale - 3.5 * geometry_scale,
-        )
-    } else {
-        // Pick the side with most available room; no card is allocated for an empty label.
-        let directions = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)];
-        let direction = directions.into_iter().max_by(|a, b| {
-            let room =
-                |d: (f32, f32)| ray_rect_distance(anchor, d, monitor) - contour_distance(hint, d);
-            room(*a).total_cmp(&room(*b))
-        })?;
-        let contour = contour_distance(hint, direction);
-        let start = (contour + 12.0 * scale + 100.0 * geometry_scale).min(
-            ray_rect_distance(anchor, direction, monitor) - 4.0 * scale - 3.5 * geometry_scale,
-        );
-        (direction, start)
-    };
+    let contour = contour_distance(hint, direction);
+    let start_distance = (contour + 12.0 * scale + 100.0 * geometry_scale)
+        .min(ray_rect_distance(anchor, direction, monitor) - 4.0 * scale - 3.5 * geometry_scale);
     let tip_distance = contour_distance(hint, direction) + 12.0 * scale;
     if start_distance - tip_distance < 14.0 * geometry_scale {
         return None;
@@ -782,52 +1108,6 @@ fn ink_edge(
     );
 }
 
-fn rounded_rect(rect: Rect, radius: f32) -> Result<Path, String> {
-    let r = radius.min(rect.w / 2.0).min(rect.h / 2.0).max(0.0);
-    let k = 0.552_284_8 * r;
-    let mut path = PathBuilder::new();
-    path.move_to(rect.x + r, rect.y);
-    path.line_to(rect.right() - r, rect.y);
-    path.cubic_to(
-        rect.right() - r + k,
-        rect.y,
-        rect.right(),
-        rect.y + r - k,
-        rect.right(),
-        rect.y + r,
-    );
-    path.line_to(rect.right(), rect.bottom() - r);
-    path.cubic_to(
-        rect.right(),
-        rect.bottom() - r + k,
-        rect.right() - r + k,
-        rect.bottom(),
-        rect.right() - r,
-        rect.bottom(),
-    );
-    path.line_to(rect.x + r, rect.bottom());
-    path.cubic_to(
-        rect.x + r - k,
-        rect.bottom(),
-        rect.x,
-        rect.bottom() - r + k,
-        rect.x,
-        rect.bottom() - r,
-    );
-    path.line_to(rect.x, rect.y + r);
-    path.cubic_to(
-        rect.x,
-        rect.y + r - k,
-        rect.x + r - k,
-        rect.y,
-        rect.x + r,
-        rect.y,
-    );
-    path.close();
-    path.finish()
-        .ok_or_else(|| "Cannot construct rounded rectangle".into())
-}
-
 fn blend_glyph(pixmap: &mut Pixmap, x: i32, y: i32, width: usize, height: usize, coverage: &[u8]) {
     let frame_width = pixmap.width() as usize;
     let frame_height = pixmap.height() as usize;
@@ -878,6 +1158,232 @@ mod tests {
             return 0;
         }
         frame.pixmap.data()[((y as u32 * frame.pixmap.width() + x as u32) * 4 + 3) as usize]
+    }
+
+    #[test]
+    fn panels_are_independent_and_empty_labels_load_no_panel_assets() {
+        let renderer = Renderer::new().unwrap();
+        let empty =
+            Hint::parse(json!({"x":500,"y":400,"text":"","arrow":false,"target":false})).unwrap();
+        let empty_frame = renderer
+            .render(&empty, monitor(), 1.0, crate::color::FALLBACK)
+            .unwrap();
+        assert!(empty_frame.panel.is_none());
+        assert!(renderer.card_assets.borrow().is_none());
+        let titled = Hint::parse(json!({"x":500,"y":400,"title":"Open settings","text":"","arrow":false,"target":false,"panel_x":20,"panel_y":30})).unwrap();
+        let frame = renderer
+            .render(&titled, monitor(), 1.0, crate::color::FALLBACK)
+            .unwrap();
+        let panel = frame.panel.unwrap();
+        assert_eq!((panel.x, panel.y, panel.page_count), (20, 30, 1));
+        assert!(frame.arrow_tip.is_none());
+        assert!(frame.fits(monitor()));
+        let card = renderer.card_cache.borrow();
+        let pixels = card.as_ref().unwrap().pixmap.data();
+        assert!(pixels
+            .chunks_exact(4)
+            .any(|p| p[0] > 230 && p[1] > 230 && p[2] > 230));
+        assert!(pixels
+            .chunks_exact(4)
+            .any(|p| p[0] > 200 && p[1] < 60 && p[2] < 70));
+        assert!(pixels.chunks_exact(4).any(|p| p[3] == 0));
+    }
+
+    #[test]
+    fn whitespace_and_line_breaks_do_not_paint_missing_glyph_boxes() {
+        let renderer = Renderer::new().unwrap();
+        let hint =
+            Hint::parse(json!({"x":500,"y":400,"text":" \n\t\r\n ","arrow":false,"target":false}))
+                .unwrap();
+        let frame = renderer
+            .render(&hint, monitor(), 1.0, crate::color::FALLBACK)
+            .unwrap();
+        assert_eq!(frame.panel.unwrap().page_count, 1);
+        assert!(!frame
+            .pixmap
+            .data()
+            .chunks_exact(4)
+            .any(|p| p[0] > 200 && p[1] > 200 && p[2] > 200));
+        assert!(
+            renderer
+                .card_cache
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .layout
+                .glyphs()
+                .len()
+                > 0
+        );
+    }
+
+    #[test]
+    fn long_paragraphs_unbroken_words_and_unicode_paginate_without_losing_glyphs() {
+        let renderer = Renderer::new().unwrap();
+        for text in [
+            "First paragraph with readable details.\n\nSecond paragraph with next steps.\n"
+                .repeat(100),
+            "unbroken".repeat(1000),
+            "é".repeat(16000),
+            "\n".repeat(16000),
+            " ".repeat(16000),
+        ] {
+            for scale in [1.0, 2.0] {
+                let mut hint = Hint::parse(json!({"x":1900,"y":1050,"title":"A longer instruction","text":text,"arrow":false,"target":false,"panel_x":1900,"panel_y":1050})).unwrap();
+                let first = renderer
+                    .render(&hint, monitor(), scale, crate::color::FALLBACK)
+                    .unwrap();
+                assert!(first.fits(monitor()));
+                assert!(first.panel.unwrap().page_count > 1);
+                {
+                    let card = renderer.card_cache.borrow();
+                    let card = card.as_ref().unwrap();
+                    let mut next = 0;
+                    for page in &card.pages {
+                        assert_eq!(page.start, next);
+                        assert!(page.width <= card.max_width + 1.0);
+                        next = page.end;
+                    }
+                    assert_eq!(next, card.layout.glyphs().len());
+                    assert!(card
+                        .layout
+                        .glyphs()
+                        .iter()
+                        .all(|glyph| glyph.key.px >= 15.0 * scale));
+                }
+                hint.text_page = u32::MAX;
+                let last = renderer
+                    .render(&hint, monitor(), scale, crate::color::FALLBACK)
+                    .unwrap();
+                let panel = last.panel.unwrap();
+                assert_eq!(panel.page + 1, panel.page_count);
+                assert!(last.fits(monitor()));
+                assert_eq!(first.panel.unwrap().page_count, panel.page_count);
+            }
+        }
+    }
+
+    #[test]
+    fn panel_placement_does_not_define_the_arrow_direction() {
+        let hint = Hint::parse(
+            json!({"x":500,"y":400,"title":"Open settings","text":"Adjust your workspace here."}),
+        )
+        .unwrap();
+        let independent = make_arrow(&hint, monitor(), None, 1.0).unwrap();
+        let with_panel = make_arrow(
+            &hint,
+            monitor(),
+            Some(Rect {
+                x: 40.0,
+                y: 500.0,
+                w: 300.0,
+                h: 100.0,
+            }),
+            1.0,
+        )
+        .unwrap();
+        assert_eq!(independent.start, with_panel.start);
+        assert_eq!(independent.tip, with_panel.tip);
+    }
+
+    #[test]
+    fn explicit_panel_leaves_a_full_arrow_on_an_unobstructed_side() {
+        let renderer = Renderer::new().unwrap();
+        for (x, y) in [(450, 300), (600, 380)] {
+            let hint = Hint::parse(json!({"x":500,"y":400,"title":"Settings","text":"Open settings here.","panel_x":x,"panel_y":y})).unwrap();
+            let frame = renderer
+                .render(&hint, monitor(), 1.0, crate::color::FALLBACK)
+                .unwrap();
+            let start = frame.arrow_start.unwrap();
+            let tip = frame.arrow_tip.unwrap();
+            assert!((start.0 - tip.0).hypot(start.1 - tip.1) >= 150.0);
+            assert_eq!(alpha(&frame, 500, 400), 0);
+        }
+    }
+
+    #[test]
+    fn fractional_dpi_panels_fit_and_reading_area_stays_opaque() {
+        let renderer = Renderer::new().unwrap();
+        let small = Rect {
+            x: -300.0,
+            y: -20.0,
+            w: 300.0,
+            h: 240.0,
+        };
+        for scale in [0.75, 1.1, 1.333, 1.5] {
+            let hint = Hint::parse(json!({"x":-150,"y":100,"title":"Readable heading","text":"unbroken".repeat(150),"panel_x":0,"panel_y":220,"panel_width":4000,"arrow":false,"target":false})).unwrap();
+            let frame = renderer
+                .render(&hint, small, scale, crate::color::FALLBACK)
+                .unwrap();
+            assert!(frame.fits(small));
+            let card = renderer.card_cache.borrow();
+            let card = card.as_ref().unwrap();
+            for y in
+                (16.0 * scale).ceil() as u32..card.pixmap.height() - (16.0 * scale).ceil() as u32
+            {
+                for x in
+                    (40.0 * scale).ceil() as u32..card.pixmap.width() - (24.0 * scale).ceil() as u32
+                {
+                    assert_eq!(
+                        card.pixmap.data()[((y * card.pixmap.width() + x) * 4 + 3) as usize],
+                        255
+                    );
+                }
+            }
+        }
+        let hint = Hint::parse(json!({"x":300,"y":200,"title":"More details","text":"Readable instructions. ".repeat(200)})).unwrap();
+        let frame = renderer
+            .render(
+                &hint,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 600.0,
+                    h: 400.0,
+                },
+                1.0,
+                crate::color::FALLBACK,
+            )
+            .unwrap();
+        assert_eq!(alpha(&frame, 300, 200), 0);
+    }
+
+    #[test]
+    fn rendering_the_selected_color_directly_preserves_pixels_and_geometry() {
+        let previous = Renderer::new().unwrap();
+        let direct = Renderer::new().unwrap();
+        for position in [(500, 400), (30, 30)] {
+            for (color, palette) in [
+                ("#00D2FF", vec![]),
+                ("auto", vec!["#EF232D"]),
+                ("auto", vec!["#FFFFFF"]),
+            ] {
+                let hint = Hint::parse(json!({
+                    "x": position.0, "y": position.1,
+                    "text": "Open settings", "color": color,
+                    "background_colors": palette
+                }))
+                .unwrap();
+                let selected = crate::color::supplied_color(&hint.color, &hint.background_colors)
+                    .unwrap()
+                    .unwrap();
+                // The old show path primed layout and the tinted sketch cache
+                // in fallback red before rendering the final selected color.
+                drop(
+                    previous
+                        .render(&hint, monitor(), 1.0, crate::color::FALLBACK)
+                        .unwrap(),
+                );
+                let expected = previous.render(&hint, monitor(), 1.0, selected).unwrap();
+                let actual = direct.render(&hint, monitor(), 1.0, selected).unwrap();
+                assert_eq!((actual.x, actual.y), (expected.x, expected.y));
+                assert_eq!(actual.arrow_tip, expected.arrow_tip);
+                assert_eq!(actual.arrow_start, expected.arrow_start);
+                assert_eq!(actual.pixmap.width(), expected.pixmap.width());
+                assert_eq!(actual.pixmap.height(), expected.pixmap.height());
+                assert_eq!(actual.pixmap.data(), expected.pixmap.data());
+            }
+        }
     }
 
     #[test]
@@ -990,7 +1496,7 @@ mod tests {
     #[test]
     fn animation_reuses_card_pixels_and_font_rasterization() {
         let renderer = Renderer::new().unwrap();
-        let hint = Hint::parse(json!({"x":500,"y":400,"text":"Open settings","step":2})).unwrap();
+        let hint = Hint::parse(json!({"x":500,"y":400,"title":"Open settings","text":"Adjust your workspace here.","step":2})).unwrap();
         let first = renderer
             .render_at(&hint, monitor(), 1.0, [10, 210, 255], 0.0)
             .unwrap();

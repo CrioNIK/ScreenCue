@@ -63,8 +63,18 @@ fn default_arrow_scale() -> f32 {
 pub struct Hint {
     pub x: i32,
     pub y: i32,
+    #[serde(default)]
+    pub title: String,
     #[serde(default = "default_text")]
     pub text: String,
+    #[serde(default)]
+    pub panel_x: Option<i32>,
+    #[serde(default)]
+    pub panel_y: Option<i32>,
+    #[serde(default)]
+    pub panel_width: Option<u32>,
+    #[serde(default)]
+    pub text_page: u32,
     #[serde(default = "default_style")]
     pub style: String,
     #[serde(default)]
@@ -107,8 +117,20 @@ impl Hint {
         if !["ellipse", "rectangle", "rounded", "polygon"].contains(&hint.shape()) {
             return Err("Unsupported shape".into());
         }
-        if hint.text.chars().count() > 500 || hint.text.contains('\0') {
-            return Err("text must be at most 500 characters without NUL".into());
+        if hint.title.chars().count() > 100 || hint.title.contains('\0') {
+            return Err("title must be at most 100 characters without NUL".into());
+        }
+        if hint.text.chars().count() > 16000 || hint.text.contains('\0') {
+            return Err("text must be at most 16000 characters without NUL".into());
+        }
+        if hint.panel_x.is_some() != hint.panel_y.is_some() {
+            return Err("panel_x and panel_y must be supplied together".into());
+        }
+        if hint
+            .panel_width
+            .is_some_and(|width| !(120..=4000).contains(&width))
+        {
+            return Err("panel_width must be 120..4000 physical pixels".into());
         }
         if hint.duration_ms != 0 && !(500..=300000).contains(&hint.duration_ms) {
             return Err("duration_ms must be 0 or 500..300000".into());
@@ -246,6 +268,45 @@ fn point_in_polygon(x: f32, y: f32, ps: &[Point]) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn optional_title_preserves_legacy_text_and_validates_character_count() {
+        let legacy = Hint::parse(json!({"x":100,"y":100,"text":"Open settings"})).unwrap();
+        assert!(legacy.title.is_empty());
+        assert_eq!(legacy.text, "Open settings");
+        let title_only =
+            Hint::parse(json!({"x":100,"y":100,"title":"Open settings","text":""})).unwrap();
+        assert_eq!(title_only.title, "Open settings");
+        assert!(title_only.text.is_empty());
+        assert!(Hint::parse(json!({"x":100,"y":100,"title":"é".repeat(100)})).is_ok());
+        for title in [
+            json!("a".repeat(101)),
+            json!("Bad\0title"),
+            json!(false),
+            Value::Null,
+        ] {
+            assert!(Hint::parse(json!({"x":100,"y":100,"title":title})).is_err());
+        }
+    }
+
+    #[test]
+    fn independent_panel_fields_and_text_limit_are_bounded() {
+        assert!(Hint::parse(json!({"x":0,"y":0,"text":"é".repeat(16000),"panel_x":-300,"panel_y":20,"panel_width":120,"text_page":u32::MAX})).is_ok());
+        for fields in [
+            json!({"panel_x":10}),
+            json!({"panel_y":10}),
+            json!({"panel_width":119}),
+            json!({"panel_width":4001}),
+            json!({"text_page":-1}),
+            json!({"text":"a".repeat(16001)}),
+        ] {
+            let mut value = json!({"x":0,"y":0});
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
+            assert!(Hint::parse(value).is_err());
+        }
+    }
     #[test]
     fn geometry_and_independence() {
         let h = Hint::parse(

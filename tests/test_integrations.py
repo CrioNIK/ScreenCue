@@ -302,7 +302,7 @@ model = "another-model"
                         executable = archive.getinfo("bin/" + binary)
                         self.assertEqual(executable.create_system, 3)
                         self.assertEqual(stat.S_IMODE(executable.external_attr >> 16), 0o755)
-                        for license_name in ("LICENSE", "IBM-Plex-Mono-OFL.txt", "THIRD-PARTY-LICENSES.txt"):
+                        for license_name in ("LICENSE", "IBM-Plex-OFL.txt", "THIRD-PARTY-LICENSES.txt"):
                             self.assertIn("licenses/" + license_name, names)
                         for name in names:
                             if name.endswith((".json", ".md", ".yaml", ".toml", ".mdc")):

@@ -124,6 +124,20 @@ async function main() {
     assert.deepEqual(hintSchema.properties.shape.enum, ['ellipse', 'rectangle', 'rounded', 'polygon']);
     assert.equal(hintSchema.properties.points.maxItems, 64);
     assert.equal(hintSchema.properties.points.minItems, 3);
+    assert.equal(hintSchema.properties.title.default, '');
+    assert.equal(hintSchema.properties.title.maxLength, 100);
+    assert.equal(hintSchema.properties.text.maxLength, 16000);
+    assert.equal(hintSchema.properties.text_page.default, 0);
+    assert.equal(hintSchema.properties.panel_x.type, 'integer');
+    assert.equal(hintSchema.properties.panel_width.minimum, 120);
+    for (const arguments_ of [
+      { x: 0, y: 0, title: 'x'.repeat(101) },
+      { x: 0, y: 0, text: 'x'.repeat(16001) },
+      { x: 0, y: 0, panel_x: 20 },
+      { x: 0, y: 0, text_page: -1 }
+    ]) {
+      assert.equal((await client.tool('screen_hint', arguments_)).result.isError, true);
+    }
     assert.equal((await client.request('unknown/method')).error.code, -32601);
     assert.equal((await client.request('tools/call', { name: 'unknown_tool' })).error.code, -32602);
     assert.equal((await client.request('tools/list', [])).error.code, -32602);
@@ -184,6 +198,23 @@ async function main() {
       assert.equal(polygon.result.isError, false, JSON.stringify(polygon));
       const arrowOnly = await client.tool('screen_hint', { x, y, text: 'Arrow only', arrow: true, target: false, color: '#00FF88' });
       assert.equal(arrowOnly.result.isError, false, JSON.stringify(arrowOnly));
+      const longText = 'A readable instruction with details, examples, and a separate next step.\n'.repeat(150);
+      const panelRequest = { x, y, title: 'Independent text panel', text: longText,
+        arrow: false, target: false, follow_window: false, color: '#EF232D',
+        panel_x: monitor.x + 20, panel_y: monitor.y + 20, panel_width: 320 };
+      const panel = await client.tool('screen_hint', panelRequest);
+      assert.equal(panel.result.isError, false, JSON.stringify(panel));
+      assert.equal(panel.data.arrow_tip, null);
+      assert.equal(panel.data.panel.page, 0);
+      assert.ok(panel.data.panel.page_count > 1);
+      assert.equal(panel.data.panel.x, monitor.x + 20);
+      const pageTwo = await client.tool('screen_hint', { ...panelRequest, text_page: 1 });
+      assert.equal(pageTwo.data.panel.page, 1);
+      assert.equal(pageTwo.data.panel.page_count, panel.data.panel.page_count);
+      assert.equal((await client.tool('screen_status')).data.hint.text, longText);
+      const titleOnly = await client.tool('screen_hint', { x, y, title: 'Heading only', text: '', arrow: false, target: false });
+      assert.equal(titleOnly.result.isError, false);
+      assert.ok(titleOnly.data.panel.width > 0);
       const cleared = await client.tool('screen_clear');
       assert.equal(cleared.result.isError, false);
       assert.equal((await client.tool('screen_status')).data.visible, false);
@@ -193,7 +224,7 @@ async function main() {
     await initialize(client, '2024-11-05');
     await client.finish();
     client = new McpClient();
-    const oversized = await client.raw(' '.repeat(32769) + '\n' + JSON.stringify({ jsonrpc: '2.0', id: 999, method: 'ping' }));
+    const oversized = await client.raw(' '.repeat(131073) + '\n' + JSON.stringify({ jsonrpc: '2.0', id: 999, method: 'ping' }));
     assert.equal(oversized.error.code, -32700);
     await client.finish();
     console.log('PASS: MCP lifecycle, notifications, schema, validation, strict JSON, Unicode and EOF' + (liveOverlay ? ', with live hint tools.' : ' (protocol-only).'));

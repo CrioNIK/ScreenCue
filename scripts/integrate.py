@@ -271,7 +271,7 @@ def bundle(args):
         shutil.copy2(exe, destination / "bin" / binary)
         (destination / "bin" / binary).chmod(0o755)
         (destination / "licenses").mkdir(exist_ok=True)
-        for source_path, name in ((REPO / "LICENSE", "LICENSE"), (REPO / "assets/OFL.txt", "IBM-Plex-Mono-OFL.txt"), (REPO / "docs/THIRD-PARTY-LICENSES.txt", "THIRD-PARTY-LICENSES.txt")):
+        for source_path, name in ((REPO / "LICENSE", "LICENSE"), (REPO / "assets/OFL.txt", "IBM-Plex-OFL.txt"), (REPO / "docs/THIRD-PARTY-LICENSES.txt", "THIRD-PARTY-LICENSES.txt")):
             shutil.copy2(source_path, destination / "licenses" / name)
         # MCPB's uploaded skill is separate; the Desktop bundle does not load it.
         suffix = ".mcpb" if client == "claude-desktop" else ".zip"

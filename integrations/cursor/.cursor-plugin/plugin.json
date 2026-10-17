@@ -1,6 +1,6 @@
 {
   "name": "screencue",
-  "version": "0.2.0",
+  "version": "0.0.3",
   "description": "Point to desktop controls immediately with a persistent, click-through SKETCH arrow.",
   "author": { "name": "CrioNIK" },
   "homepage": "https://github.com/CrioNIK/ScreenCue",

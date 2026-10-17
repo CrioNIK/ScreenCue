@@ -2,20 +2,22 @@
 
 Bold, hand-drawn arrows and light outlines **over your desktop**. An AI agent can point to the next control while you keep working in the application.
 
-Ask by voice or text. The agent calls `screen_hint`, and you click the control yourself. Hints let mouse input pass through and never take keyboard focus. A short label is optional.
+Ask by voice or text. The agent calls `screen_hint`, and you click the control yourself. Hints let mouse input pass through and never take keyboard focus. A separate dark text panel is optional.
 
 <img src="assets/screencue-punk.png" alt="ScreenCue" width="120">
 
-**Rust · Windows / macOS / Linux X11 · Local MCP · MIT · Preview 0.2.0**
+**Rust · Windows / macOS / Linux X11 · Local MCP · MIT · Preview 0.0.3**
 
-![Actual renderer output: an animated sketch arrow and a separate target outline](docs/preview.gif)
+Early releases follow the [`0.0.x` versioning policy](docs/VERSIONING.md); small follow-up revisions use letter suffixes.
+
+![Actual native renderer: short hints, paginated text, and independent panels on light and dark backgrounds](docs/panels-preview.png)
 
 ## Features
 
 - A large, crooked SKETCH arrow made from four hand-drawn animation frames. Its tip stops **12 px before the target**, scaled for display density.
 - Independent arrow and target outline. Use an ellipse, rectangle, rounded rectangle, or polygon; outlines have no fill.
 - Red is the primary color. Automatic contrast can select another color when red blends into the background, then return to red when suitable.
-- Optional short label and step number. Set `text: ""` to omit the label.
+- Independent dark brush panels with a bold title and readable body. Their shape adapts to the text; long text wraps into monitor-bounded pages. Show a panel without an arrow or target, or place it separately with `panel_x` / `panel_y`. See [text panels](docs/INTEGRATION.md#text-panels).
 - Persistent hints: clicks and changes of the active application do not dismiss them.
 - Local window tracking without another model call. When the target goes offscreen or its window is minimized or closed, a labeled pointer stays at the display edge.
 - **Ctrl+Alt+X** to hide the entire hint; **Ctrl+Option+X** on macOS. The shortcut is configurable.
@@ -62,13 +64,15 @@ Set `--follow-window false` for fixed desktop coordinates; the demo uses this mo
 
 ## Connect your agent
 
-ScreenCue includes integration packages and agent guidance for **Codex, Claude, Gemini, and Cursor**. Start with the [integration guide](docs/INTEGRATION.md), then follow the relevant [client guide](docs/clients/). Native plugin, extension, skill, and configuration formats differ between clients. The [verification report](docs/VERIFICATION.md) separates tested behavior from remaining client and desktop checks.
+ScreenCue includes integration packages and agent guidance for **Codex, Claude, Gemini, and Cursor**. Start with the [integration guide](docs/INTEGRATION.md), then follow the relevant [client guide](docs/clients/). Native plugin, extension, skill, and configuration formats differ between clients. The [0.0.3 verification report](docs/VERIFICATION-0.0.3.md) covers this build; the [earlier client verification record](docs/VERIFICATION.md) distinguishes actual client sessions from package validation.
 
 The client must launch a local `stdio` MCP process in your graphical desktop session. A cloud chat or voice interface does not gain desktop access merely because the MCP server is configured. Direct Dot/Alt access depends on that environment exposing local tools; it is not assumed.
 
 The tools are `screen_displays`, `screen_hint`, `screen_clear`, and `screen_status`. Each MCP process owns one hint. For a custom agent without MCP, use `--json` with the same hint model.
 
 The agent guidance prioritizes a short path: **observe the current screen → show the hint immediately → give a brief explanation**. It must not open, activate, or switch windows to locate a control. An observation tool is separate from ScreenCue and must already be available to the client.
+
+An optional [System 1 / System 2 controller](controller/README.md) can select among already observed controls. It includes typed Choice adapters for TypeSafe Jev, OpenAI Decisions, and Ollama, plus a JSON command adapter for other models and agents. Direct hints need no model call. The controller uses deadlines and rejects stale answers; it is separate from the lightweight Rust executable. Provider schemas and control flow have offline tests, not live model or screen-perception verification.
 
 ## Platforms and limits
 
@@ -79,6 +83,8 @@ The agent guidance prioritizes a short path: **observe the current screen → sh
 | Linux | X11 with a compositor | Local X11 updates about once per second |
 
 Native Wayland is not supported. Protected screens, some full-screen applications, remote sessions, and window-manager behavior can limit overlays. Run the client in the same graphical session as the application being guided.
+
+True exclusive fullscreen is **not universally supported** by this desktop window. `presentation.window_mapped` reports native window state, while `presentation.fullscreen_visibility` remains `"unverified"`. See the [fullscreen backend plan and verification requirements](docs/FULLSCREEN-PLAN.md); Game Bar, native Wayland, and in-game adapters are not implemented yet.
 
 CI builds four targets across three operating systems and runs unit tests on the runner architecture. Windows includes the C runtime statically. Windows desktop behavior has been tested with the native test suite; a successful macOS/Linux build does not verify every desktop or AI client. Client guides distinguish protocol/configuration validation from live client testing.
 
@@ -92,7 +98,7 @@ For `color: "auto"`, the agent can supply up to 16 `background_colors` from its 
 
 Automatic color prefers red `#EF232D`, changes it when contrast is poor, and returns to red when suitable. The response reports `color_source` and any fallback reason. An explicit `#RRGGBB` disables sampling and keeps that color. A single color cannot guarantee contrast against every moving background pixel.
 
-The native executable has no network server, telemetry, or model requests. A client's handling of its own observations is controlled by that client. The font and four arrow frames are embedded; the README logo is documentation-only artwork.
+The native executable has no network server, telemetry, or model requests. A client's handling of its own observations is controlled by that client. The fonts, brush texture, and four arrow frames are embedded; the README logo is documentation-only artwork. The optional controller makes requests only to explicitly configured providers. See [latency measurements](docs/LATENCY.md) for the scope of measured native improvements.
 
 ## Build and test
 
@@ -120,4 +126,4 @@ node .\tests\mcp-smoke.cjs .\target\release\screencue.exe --live
 
 Omit `--live` to check only the protocol. Node.js is needed for the test, not the native executable.
 
-Code: [MIT](LICENSE). Embedded IBM Plex Mono: [SIL Open Font License 1.1](assets/OFL.txt). Dependency notices: [THIRD-PARTY-LICENSES.txt](docs/THIRD-PARTY-LICENSES.txt).
+Code: [MIT](LICENSE). Embedded IBM Plex fonts: [SIL Open Font License 1.1](assets/OFL.txt), with [font provenance](docs/FONTS.md). Dependency notices: [THIRD-PARTY-LICENSES.txt](docs/THIRD-PARTY-LICENSES.txt).

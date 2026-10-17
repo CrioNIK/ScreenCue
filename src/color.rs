@@ -1,6 +1,23 @@
 // Contrast across the local background, with color similarity as a secondary cue.
 // No capture or timer here; hysteresis prevents needless color flicker.
 pub const FALLBACK: [u8; 3] = [239, 35, 45];
+
+/// Resolve colors supplied by the client before rasterizing the first frame.
+/// None requests local background sampling; an explicit color always wins.
+pub fn supplied_color(color: &str, palette: &[String]) -> Result<Option<[u8; 3]>, String> {
+    if color != "auto" {
+        return crate::model::parse_color(color).map(Some);
+    }
+    if palette.is_empty() {
+        return Ok(None);
+    }
+    let pixels = palette
+        .iter()
+        .map(|color| crate::model::parse_color(color))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Some(choose(&pixels)))
+}
+
 const CANDIDATES: [[u8; 3]; 11] = [
     FALLBACK,
     [0, 229, 255],
@@ -164,6 +181,25 @@ pub fn choose_stable(pixels: &[[u8; 3]], current: [u8; 3]) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn supplied_colors_resolve_without_a_desktop_sample() {
+        let palette = ["#EF232D".to_owned()];
+        assert_eq!(
+            supplied_color("#123456", &palette).unwrap(),
+            Some([18, 52, 86])
+        );
+        let automatic = supplied_color("auto", &palette).unwrap().unwrap();
+        assert_ne!(automatic, FALLBACK);
+        assert!(contrast(automatic, FALLBACK) >= 3.0);
+        assert_eq!(supplied_color("auto", &[]).unwrap(), None);
+        assert_eq!(
+            supplied_color("auto", &["#FFFFFF".to_owned()]).unwrap(),
+            Some(FALLBACK)
+        );
+        assert!(supplied_color("#notrgb", &[]).is_err());
+        assert!(supplied_color("auto", &["not a color".to_owned()]).is_err());
+    }
+
     #[test]
     fn adapts_to_background() {
         for bg in [[255, 255, 255], [0, 0, 0], [0, 229, 255], FALLBACK] {

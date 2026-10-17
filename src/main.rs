@@ -193,6 +193,7 @@ impl App {
             && state == "window"
             && same_rect(a.monitor, monitor)
             && a.scale == scale
+            && displayed.panel_x.is_none()
         {
             if let (Some(dx), Some(dy), Some(frame)) = (dx, dy, self.frame.as_mut()) {
                 let destination = Rect {
@@ -292,7 +293,7 @@ impl App {
                 Ok(json!({"ok":true,"visible":false}))
             }
             "status" => Ok(
-                json!({"ok":true,"version":env!("CARGO_PKG_VERSION"),"visible":self.frame.is_some(),"hint":self.hint,"tracking":self.tracking_status(),"rendered_target":self.render_hint.as_ref().map(Hint::anchor),"arrow_tip":self.frame.as_ref().and_then(|f|f.arrow_tip),"color_source":self.color_source,"color_note":self.color_note,"color":self.animation.as_ref().map(|a|color_hex(a.color)),"hide_shortcut":self.shortcut.as_ref().map(|s|&s.name),"hide_shortcut_id":self.shortcut.as_ref().map(|s|s.id()),"shortcut_active":self.shortcut.as_ref().is_some_and(|s|s.active()),"shortcut_error":self.shortcut.as_ref().and_then(|s|s.error.as_ref()),"pid":std::process::id()}),
+                json!({"ok":true,"version":env!("CARGO_PKG_VERSION"),"visible":self.frame.is_some(),"hint":self.hint,"tracking":self.tracking_status(),"rendered_target":self.render_hint.as_ref().map(Hint::anchor),"arrow_tip":self.frame.as_ref().and_then(|f|f.arrow_tip),"panel":self.frame.as_ref().and_then(|f|f.panel),"presentation":platform::presentation_status(self.frame.is_some()),"color_source":self.color_source,"color_note":self.color_note,"color":self.animation.as_ref().map(|a|color_hex(a.color)),"hide_shortcut":self.shortcut.as_ref().map(|s|&s.name),"hide_shortcut_id":self.shortcut.as_ref().map(|s|s.id()),"shortcut_active":self.shortcut.as_ref().is_some_and(|s|s.active()),"shortcut_error":self.shortcut.as_ref().and_then(|s|s.error.as_ref()),"pid":std::process::id()}),
             ),
             "show" => {
                 let hint = Hint::parse(request)?;
@@ -327,11 +328,13 @@ impl App {
                 {
                     return Err("The complete target must fit on one display".into());
                 }
+                let supplied_color = color::supplied_color(&hint.color, &hint.background_colors)?;
+                let initial_color = supplied_color.unwrap_or(color::FALLBACK);
                 let layout = self.renderer.render(
                     &hint,
                     bounds,
                     monitor.scale_factor() as f32,
-                    color::FALLBACK,
+                    initial_color,
                 )?;
                 let mut tracking_note = None;
                 let tracked = if hint.follow_window {
@@ -382,13 +385,7 @@ impl App {
                 let mut background = [Vec::new(), Vec::new()];
                 let selected = if hint.color == "auto" && !hint.background_colors.is_empty() {
                     self.color_source = "client_palette".into();
-                    color::choose(
-                        &hint
-                            .background_colors
-                            .iter()
-                            .map(|c| model::parse_color(c).unwrap())
-                            .collect::<Vec<_>>(),
-                    )
+                    initial_color
                 } else if hint.color == "auto" {
                     match sample_background(&hint, bounds, Some(&layout), 0) {
                         Ok(pixels) if !pixels.is_empty() => {
@@ -409,11 +406,16 @@ impl App {
                     }
                 } else {
                     self.color_source = "manual".into();
-                    model::parse_color(&hint.color)?
+                    initial_color
                 };
-                let frame =
+                // The prepared raster already has the final color for manual
+                // colors, client palettes, and local samples that retain red.
+                let frame = if selected == initial_color {
+                    layout
+                } else {
                     self.renderer
-                        .render(&hint, bounds, monitor.scale_factor() as f32, selected)?;
+                        .render(&hint, bounds, monitor.scale_factor() as f32, selected)?
+                };
                 let window = self.window.as_ref().ok_or("Window is not ready")?;
                 platform::set_bounds(
                     window,
@@ -444,7 +446,7 @@ impl App {
                 let now = Instant::now();
                 self.animation = Some(Animation {
                     sample_index: usize::from(
-                        self.color_source == "local_pixels" && layout.arrow_start.is_some(),
+                        self.color_source == "local_pixels" && frame.arrow_start.is_some(),
                     ),
                     background,
                     monitor: bounds,
@@ -466,7 +468,7 @@ impl App {
                 self.render_hint = Some(hint.clone());
                 self.hint = Some(hint);
                 Ok(
-                    json!({"ok":true,"visible":true,"arrow_tip":arrow_tip,"tracking":self.tracking_status(),"rendered_target":self.render_hint.as_ref().map(Hint::anchor),"color":color_hex(selected),"color_source":self.color_source,"color_note":self.color_note,"hide_shortcut":self.shortcut.as_ref().map(|s|&s.name),"hide_shortcut_id":self.shortcut.as_ref().map(|s|s.id()),"shortcut_active":self.shortcut.as_ref().is_some_and(|s|s.active()),"shortcut_error":self.shortcut.as_ref().and_then(|s|s.error.as_ref())}),
+                    json!({"ok":true,"visible":true,"arrow_tip":arrow_tip,"panel":self.frame.as_ref().and_then(|f|f.panel),"presentation":platform::presentation_status(self.frame.is_some()),"tracking":self.tracking_status(),"rendered_target":self.render_hint.as_ref().map(Hint::anchor),"color":color_hex(selected),"color_source":self.color_source,"color_note":self.color_note,"hide_shortcut":self.shortcut.as_ref().map(|s|&s.name),"hide_shortcut_id":self.shortcut.as_ref().map(|s|s.id()),"shortcut_active":self.shortcut.as_ref().is_some_and(|s|s.active()),"shortcut_error":self.shortcut.as_ref().and_then(|s|s.error.as_ref())}),
                 )
             }
             _ => Err(format!("Unknown command: {command}")),
@@ -802,7 +804,8 @@ fn parse_cli(args: &[String]) -> Result<Value, String> {
             "arrow_scale" => json!(text
                 .parse::<f32>()
                 .map_err(|_| "Expected arrow scale number")?),
-            "x" | "y" | "width" | "height" | "duration_ms" | "step" => {
+            "x" | "y" | "width" | "height" | "duration_ms" | "step" | "panel_x" | "panel_y"
+            | "panel_width" | "text_page" => {
                 json!(text.parse::<i64>().map_err(|_| "Expected integer")?)
             }
             "arrow" | "target" | "animate" | "follow_window" => {
@@ -817,7 +820,7 @@ fn parse_cli(args: &[String]) -> Result<Value, String> {
                 }
                 json!(points)
             }
-            "text" | "style" | "shape" | "color" => json!(text),
+            "title" | "text" | "style" | "shape" | "color" => json!(text),
             _ => return Err(format!("Unknown option: {key}")),
         };
         if obj.insert(key, value).is_some() {
@@ -868,6 +871,7 @@ fn run() -> Result<(), String> {
     }
     if args.first().is_some_and(|a| a == "--help" || a == "-h") {
         println!("ScreenCue — lightweight cross-platform desktop hints\n\n  screencue --mcp                MCP over stdin/stdout\n  screencue --json               JSON commands over stdin/stdout\n  screencue demo                 Demo until the hide shortcut\n  screencue displays             Physical monitor coordinates\n  screencue show --x 500 --y 300 --text \"Click here\"\n\nOptions: --shape ellipse|rectangle|rounded|polygon, --width, --height,\n--points \"x,y;x,y;x,y\", --arrow true|false, --target true|false,\n--arrow-scale 0.75..2.5, --animate true|false, --color auto|#RRGGBB,\n--background-colors \"#FFFFFF,#202124\", --duration-ms 0|500..300000,\n--step 1..99. Global: --hide-shortcut Ctrl+Alt+X (default; Option on Mac).\nCLI show persists by default until hidden; an explicit duration sets expiry.\nMCP/JSON keep one overlay per connection. Linux needs X11 + a compositor.\nAuto color checks a small background patch about once per second while visible.");
+        println!("Text panels: --title (up to 100 characters), --text (up to 16000), --panel-x/--panel-y,\n--panel-width 120..4000, --text-page 0..N. Use --arrow false --target false for a panel only.");
         println!("Window movement follows locally by default; --follow-window false fixes desktop coordinates.\nScrolling/rearranged controls need a fresh hint. Offscreen targets keep a labelled edge cue.");
         return Ok(());
     }
@@ -877,9 +881,16 @@ fn run() -> Result<(), String> {
     }
     if args.first().is_some_and(|a| a == "--render-preview") {
         let output = args.get(1).ok_or("--render-preview needs a path")?;
-        let hint = Hint::parse(
-            json!({"x":240,"y":80,"text":"Open settings","shape":"rounded","width":90,"height":30}),
-        )?;
+        let request = if let Some(path) = args.get(3) {
+            serde_json::from_str(
+                &std::fs::read_to_string(path)
+                    .map_err(|error| format!("Cannot read preview request: {error}"))?,
+            )
+            .map_err(|error| format!("Invalid preview request: {error}"))?
+        } else {
+            json!({"x":420,"y":90,"title":"Open settings","text":"Adjust your workspace here.","shape":"rounded","width":90,"height":30})
+        };
+        let hint = Hint::parse(request)?;
         let phase = args
             .get(2)
             .map(|s| s.parse::<f32>())
@@ -891,8 +902,8 @@ fn run() -> Result<(), String> {
             Rect {
                 x: 0.,
                 y: 0.,
-                w: 500.,
-                h: 350.,
+                w: 600.,
+                h: 400.,
             },
             1.,
             color::FALLBACK,
@@ -979,7 +990,7 @@ fn serve_json(send: impl Fn(protocol::Command) -> Result<(), String>) {
                 .map(|n| n + 1)
                 .unwrap_or(available.len());
             let ends = available[n - 1] == b'\n';
-            if bytes.len() + n > 32768 {
+            if bytes.len() + n > protocol::MAX_LINE_BYTES {
                 oversized = true
             } else {
                 bytes.extend_from_slice(&available[..n]);
@@ -993,7 +1004,7 @@ fn serve_json(send: impl Fn(protocol::Command) -> Result<(), String>) {
             let _ = writeln!(
                 output,
                 "{}",
-                json!({"ok":false,"error":"Message exceeds 32768 bytes"})
+                json!({"ok":false,"error":"Message exceeds 131072 bytes"})
             );
             let _ = output.flush();
             return;

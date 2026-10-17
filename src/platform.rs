@@ -6,6 +6,26 @@
 
 use winit::window::Window;
 
+/// Mapping a native window is not evidence that a game's presentation path
+/// composites it. Keep that distinction visible to clients on every platform.
+pub fn presentation_status(window_mapped: bool) -> serde_json::Value {
+    let backend = if cfg!(target_os = "windows") {
+        "win32_layered"
+    } else if cfg!(target_os = "macos") {
+        "appkit_layer"
+    } else if cfg!(target_os = "linux") {
+        "x11_argb"
+    } else {
+        "unsupported"
+    };
+    serde_json::json!({
+        "backend": backend,
+        "window_mapped": window_mapped,
+        "fullscreen_visibility": "unverified",
+        "exclusive_fullscreen_guaranteed": false
+    })
+}
+
 /// A native top-level window snapshot in the same physical desktop coordinates
 /// as the overlay API. `scale` lets callers retain a logical offset across DPI changes.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2003,6 +2023,37 @@ mod imp {
                 .map_err(|error| error.to_string())?
                 .check()
                 .map_err(|error| error.to_string())?;
+            // Only annotate our own surface. These EWMH hints ask the compositor
+            // to preserve alpha composition; they do not force game redirection.
+            for (property, value, property_type) in [
+                (
+                    b"_NET_WM_BYPASS_COMPOSITOR".as_slice(),
+                    2,
+                    AtomEnum::CARDINAL,
+                ),
+                (
+                    b"_NET_WM_WINDOW_TYPE".as_slice(),
+                    connection
+                        .intern_atom(false, b"_NET_WM_WINDOW_TYPE_NOTIFICATION")
+                        .map_err(|error| error.to_string())?
+                        .reply()
+                        .map_err(|error| error.to_string())?
+                        .atom,
+                    AtomEnum::ATOM,
+                ),
+            ] {
+                let property = connection
+                    .intern_atom(false, property)
+                    .map_err(|error| error.to_string())?
+                    .reply()
+                    .map_err(|error| error.to_string())?
+                    .atom;
+                connection
+                    .change_property32(PropMode::REPLACE, window, property, property_type, &[value])
+                    .map_err(|error| error.to_string())?
+                    .check()
+                    .map_err(|error| error.to_string())?;
+            }
             let gc = connection
                 .generate_id()
                 .map_err(|error| error.to_string())?;

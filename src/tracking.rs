@@ -104,6 +104,7 @@ pub fn edge_hint(hint: &Hint, monitor: Rect, scale: f32, note: &str) -> Hint {
     display.points.clear();
     display.arrow = Some(true);
     display.target = false;
+    display.title.clear();
     display.text = note.into();
     display.step = 1;
     display

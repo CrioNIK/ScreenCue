@@ -124,7 +124,7 @@ These are configuration patterns, not a promise that every client accepts the sa
 
 The macOS binary requires macOS 12.3 or later. Local automatic color sampling requires macOS 15.2 or later; on older supported versions, provide an agent palette or use an explicit color.
 
-The server implements MCP revisions `2025-11-25`, `2025-06-18`, `2025-03-26`, and `2024-11-05`; an unsupported initialization revision receives `2025-11-25` for negotiation. Its framing follows the [MCP stdio transport specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports): UTF-8 JSON-RPC messages, one message per line, protocol output only on stdout. Diagnostics use stderr. Maximum message content is 32,768 bytes.
+The server implements MCP revisions `2025-11-25`, `2025-06-18`, `2025-03-26`, and `2024-11-05`; an unsupported initialization revision receives `2025-11-25` for negotiation. Its framing follows the [MCP stdio transport specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports): UTF-8 JSON-RPC messages, one message per line, protocol output only on stdout. Diagnostics use stderr. Maximum message content is 131,072 bytes.
 
 ## Tools
 
@@ -144,7 +144,11 @@ The global hide shortcut is `Ctrl+Alt+X` (`Ctrl+Option+X` on macOS). Override it
 | Field | Meaning |
 | --- | --- |
 | `x`, `y` | Required integer coordinates in physical desktop pixels |
-| `text` | Up to 500 characters; `""` hides the text card; default `"Click here"` |
+| `title` | Optional bold heading, up to 100 characters; default empty |
+| `text` | Body up to 16,000 characters; default `"Click here"`. Empty title and body hide the panel |
+| `panel_x`, `panel_y` | Optional integer pair for the panel's physical desktop top-left, clamped to the selected display |
+| `panel_width` | Preferred width cap, 120–4,000 physical pixels. Short text shrinks the panel; a narrower request expands to the readable minimum of 140 logical pixels, subject to display bounds |
+| `text_page` | Zero-based page index, default 0; out-of-range indices clamp to the last available page |
 | `style` | `"arrow"` by default; `"box"` uses a top-left anchor and requires `width`/`height` |
 | `shape` | `"ellipse"`, `"rectangle"`, `"rounded"`, or `"polygon"`; defaults to ellipse for arrow style and rectangle for box style |
 | `width`, `height` | Outline dimensions, 1–4,000 pixels; default 16 × 16 for arrow style |
@@ -160,6 +164,20 @@ The global hide shortcut is `Ctrl+Alt+X` (`Ctrl+Option+X` on macOS). Override it
 | `step` | Optional number, 1–99; default 1 |
 
 With arrow style, `x,y` is the center of the target. With box style, it is the top-left corner, except for polygons, where it must lie inside the supplied outline. Polygon points stay absolute; they are not offsets from `x,y`. Explicitly sized targets and polygons must fit on one monitor. The arrow stops outside the target outline, leaving the marked control visible.
+
+### Text panels
+
+The panel, arrow, and target contour are independent drawing elements on one click-through native surface. Set `arrow: false` and `target: false` to show only text. `x,y` still selects the display and optional window anchor; use `panel_x,panel_y` together to place the panel explicitly. Text layout determines the brush background's dimensions instead of fitting text into a fixed picture. The text is rendered natively with embedded IBM Plex Sans regular/bold fonts.
+
+Long text wraps at word boundaries, and long words wrap by character. The page-height budget is 360 logical pixels, reduced further when needed to fit the display. A longer title/body flow is split at line boundaries into pages without reducing font size. A small page counter appears when needed. The agent selects `text_page`; the overlay does not capture scrolling or keyboard focus. `show` and `screen_status` return `panel: {x,y,width,height,page,page_count}` (or `null` when absent), so the agent can discover the actual clamped position and page count. Resend the full text with the next page index to change pages. The bounded API accepts 16,000 body characters per hint; split larger documents into multiple hints.
+
+```json
+{"x":600,"y":400,"title":"Open settings","text":"Adjust the workspace here.","arrow":false,"target":false,"panel_x":100,"panel_y":100,"panel_width":380,"follow_window":false}
+```
+
+The supplied physical panel position is independent of arrow geometry and remains fixed while the target moves within the selected display. Crossing displays or changing scale re-clamps the panel to the target's selected display. Without explicit panel coordinates, the automatically placed panel follows the hint scene. Each process still owns one scene, not a collection of separately addressable windows. Embedded fonts cover Latin and Cyrillic; complex script shaping, emoji, and rich text are not implemented.
+
+### Hint examples
 
 Examples of `screen_hint` arguments:
 
@@ -263,4 +281,4 @@ Each `show` command starts its own process, prints its result, and stays alive u
 - Protected desktops and some fullscreen applications may prevent a global overlay. Multi-monitor DPI changes and each OS/window-manager combination need desktop testing.
 - CI builds Windows x64, macOS Apple Silicon, macOS Intel, and Linux x64/X11 binaries. Unit tests run natively on each Windows, macOS or Ubuntu runner; the Intel macOS build does not imply Intel GUI execution on an ARM runner. CI does not certify desktop interaction or compatibility with every MCP client. `tests/windows-native.ps1` tests one live Windows session without synthesizing clicks.
 
-Code is MIT licensed. The embedded IBM Plex Mono font is distributed under [SIL OFL 1.1](../assets/OFL.txt). The generated SKETCH arrow atlas is embedded in the executable; the separate project mark is documentation artwork and is not loaded by the renderer.
+Code is MIT licensed. Embedded IBM Plex fonts are distributed under [SIL OFL 1.1](../assets/OFL.txt). The generated SKETCH arrow atlas and dark brush texture are embedded in the executable; the separate project mark is documentation artwork and is not loaded by the renderer.

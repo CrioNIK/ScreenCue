@@ -256,12 +256,21 @@ try {
     $palette = Send-Command @{ command = 'show'; x = $x; y = $y; text = ''; color = 'auto'; background_colors = @('#FAFAFA', '#202124') }
     Assert-That ($palette.color_source -eq 'client_palette') 'Client palette did not bypass local sampling.'
 
-    # A layout failure must not destroy the last successfully displayed cue.
-    # This is below the character limit but far too tall to fit on the screen.
+    # Long text uses readable pages; no input focus or scrolling surface is added.
+    $longText = 'A' + ("`n" * 200) + 'B'
+    $focusedBeforePanel = [ScreenCueRustNativeTest]::GetForegroundWindow()
+    $longPanel = Send-Command @{ command = 'show'; x = $x; y = $y; title = 'Long instructions'; text = $longText; arrow = $false; target = $false; color = '#EF232D'; animate = $false }
+    Assert-That ($longPanel.panel.page_count -gt 1 -and $longPanel.panel.page -eq 0) 'Long text was not paginated.'
+    Assert-That ($null -eq $longPanel.arrow_tip) 'A panel-only hint drew an arrow.'
+    Assert-That ([ScreenCueRustNativeTest]::GetForegroundWindow() -eq $focusedBeforePanel) 'Text panel took input focus.'
+    $lastPanel = Send-Command @{ command = 'show'; x = $x; y = $y; title = 'Long instructions'; text = $longText; text_page = 9999; arrow = $false; target = $false; color = '#EF232D'; animate = $false }
+    Assert-That ($lastPanel.panel.page -eq ($lastPanel.panel.page_count - 1)) 'Out-of-range page did not select the last page.'
+
+    # An invalid replacement must not destroy the last successfully displayed cue.
     [void](Send-Command @{ command = 'show'; x = $x; y = $y; text = 'Keep the previous valid cue'; color = '#AC4DFF'; duration_ms = 0; animate = $false })
     $previousStatus = Send-Command @{ command = 'status' }
     $previousHint = $previousStatus.hint | ConvertTo-Json -Depth 12 -Compress
-    $oversizedText = 'A' + ("`n" * 200) + 'B'
+    $oversizedText = 'A' * 16001
     [void](Send-Command @{ command = 'show'; x = $x; y = $y; text = $oversizedText; color = '#FFAA33'; duration_ms = 0; animate = $false } $false)
     $status = Send-Command @{ command = 'status' }
     Assert-That ($status.visible -and $status.shortcut_active) 'Rejected replacement cleared the existing cue or its shortcut.'

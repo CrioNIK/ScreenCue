@@ -6,7 +6,7 @@ use std::io::{self, BufRead, Write};
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
-const MAX_LINE_BYTES: usize = 32_768;
+pub const MAX_LINE_BYTES: usize = 131_072;
 const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 const LATEST_HANDSHAKE_VERSION: &str = "2025-11-25";
 
@@ -70,7 +70,7 @@ fn serve_io<R: BufRead, W: Write, F: Fn(Command) -> Result<(), String>>(
                     &error(
                         Value::Null,
                         -32700,
-                        "Message exceeds the 32768-byte line limit.",
+                        "Message exceeds the 131072-byte line limit.",
                     ),
                 )?;
                 // Never reinterpret an oversized message's remaining bytes as a new request.
@@ -312,7 +312,12 @@ pub fn tool_definitions() -> Value {
                 "properties": {
                     "x": {"type": "integer", "minimum": i32::MIN, "maximum": i32::MAX, "description": "Physical desktop x: target center for arrow style, top-left for box style, or interior anchor for polygon. May be negative."},
                     "y": {"type": "integer", "minimum": i32::MIN, "maximum": i32::MAX, "description": "Physical desktop y: target center for arrow style, top-left for box style, or interior anchor for polygon. May be negative."},
-                    "text": {"type": "string", "maxLength": 500, "default": "Click here", "description": "Short instruction beside the target. Empty string hides the text card."},
+                    "title": {"type": "string", "maxLength": 100, "default": "", "description": "Optional bold heading above the instruction. Keep it brief. Empty by default."},
+                    "text": {"type": "string", "maxLength": 16000, "default": "Click here", "description": "Instruction text in an independent panel. Long text is paginated at a readable size, never truncated. Empty text and an empty title hide the panel."},
+                    "panel_x": {"type": "integer", "minimum": i32::MIN, "maximum": i32::MAX, "description": "Optional independent panel top-left in physical desktop pixels. Supply panel_y too. Placement is clamped to the hint display."},
+                    "panel_y": {"type": "integer", "minimum": i32::MIN, "maximum": i32::MAX, "description": "Optional independent panel top-left; requires panel_x."},
+                    "panel_width": {"type": "integer", "minimum": 120, "maximum": 4000, "description": "Preferred panel width limit in physical pixels; bounded by the display and readable typography. Text wraps and height adapts."},
+                    "text_page": {"type": "integer", "minimum": 0, "maximum": u32::MAX, "default": 0, "description": "Zero-based text page. Values beyond the final page select the final page. The response reports panel.page and panel.page_count. Use arrow=false,target=false for a panel-only hint."},
                     "animate": {"type":"boolean","default":true,"description":"The four-frame SKETCH arrow advances at 5 steps per second; the light target contour animates at about 12 frames per second. False freezes both."},
                     "follow_window": {"type":"boolean","default":true,"description":"Locally follow the original app window under the target. Movement is tracked without another agent call; offscreen/minimized targets keep a labelled screen-edge cue. Does not follow scrolling or rearranged controls: refresh the hint after UI changes. False fixes desktop coordinates."},
                     "background_colors": {"type":"array","maxItems":16,"items":{"type":"string","pattern":"^#[0-9A-Fa-f]{6}$"},"description":"Optional representative colors from a fresh screenshot around the target, including repeated common colors. Auto color uses this palette without local pixel sampling; useful on macOS."},
@@ -402,6 +407,21 @@ mod tests {
     }
 
     #[test]
+    fn maximum_unicode_text_fits_the_bounded_transport_even_when_escaped() {
+        let input = format!(
+            "{{\"x\":1,\"y\":1,\"text\":\"{}\"}}\n",
+            "\\u00e9".repeat(16000)
+        );
+        assert!(input.len() < MAX_LINE_BYTES);
+        let mut reader = Cursor::new(input);
+        let Line::Text(line) = read_line_bounded(&mut reader).unwrap() else {
+            panic!("valid text was rejected by transport")
+        };
+        let hint = crate::model::Hint::parse(serde_json::from_slice(&line).unwrap()).unwrap();
+        assert_eq!(hint.text.chars().count(), 16000);
+    }
+
+    #[test]
     fn notification_has_no_response_and_unicode_id_is_preserved() {
         let mut initialized = false;
         assert!(handle_message(
@@ -476,6 +496,20 @@ mod tests {
         assert_eq!(schema["anyOf"][0]["const"], 0);
         assert_eq!(schema["anyOf"][1]["minimum"], 500);
         assert_eq!(schema["anyOf"][1]["maximum"], 300000);
+    }
+
+    #[test]
+    fn title_schema_matches_optional_model_field() {
+        let definitions = tool_definitions();
+        let schema = &definitions[0]["inputSchema"]["properties"]["title"];
+        let hint = crate::model::Hint::parse(json!({"x":100,"y":100})).unwrap();
+        assert_eq!(schema["default"], hint.title);
+        assert_eq!(schema["type"], "string");
+        assert_eq!(schema["maxLength"], 100);
+        assert!(!definitions[0]["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("title")));
     }
 
     #[test]
