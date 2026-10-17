@@ -7,6 +7,9 @@ Portable overlay archives and agent integration bundles remain separate download
 The optional System 1/System 2 conversation orchestrator is included under
 `controller/`; it needs a separately installed Python interpreter configured by
 absolute path. The basic native helper does not require Python.
+On macOS, controller scripts and their examples are in
+`ScreenCue.app/Contents/Resources/controller`; the two native executables are in
+`Contents/MacOS`. Windows and Linux keep `controller/` beside the executables.
 
 | Download | Installation |
 | --- | --- |

@@ -49,10 +49,11 @@ def package(platform: str, overlay: Path, helper: Path, output: Path) -> dict:
     # credentials into a release archive with a wildcard.
     for name in ["README.md", "example.json"]:
         copy(ROOT / "conversation" / name, resources / "conversation" / name)
-    # The optional Python orchestrator is resolved next to the native helper,
-    # including inside a macOS bundle's Contents/MacOS directory.
+    # Scripts belong to Resources in an Apple bundle. Contents/MacOS is reserved
+    # for signed native executables; placing Python files there causes strict
+    # code-signature verification to treat them as unsigned nested code.
     for name in ["screencue_controller.py", "conversation_orchestrator.py", "CONVERSATION.md", "conversation.example.json"]:
-        copy(ROOT / "controller" / name, binaries / "controller" / name)
+        copy(ROOT / "controller" / name, resources / "controller" / name)
     helper_notices = ROOT / "conversation/THIRD-PARTY-LICENSES.txt"
     copy(helper_notices, resources / "licenses/CONVERSATION-THIRD-PARTY-LICENSES.txt")
     copy(ROOT / "assets/app-icon-256.png", resources / "app-icon.png")

@@ -75,7 +75,7 @@ impl App {
             window.window(),
             self.preferences.hide_from_capture,
         ));
-        window.window().set_visible(true);
+        show_settings_window(window.window());
         window.window().request_redraw();
         self.settings_window = Some(window);
         self.refresh_ui();
@@ -444,4 +444,22 @@ fn prepare_settings_capture(window: &winit::window::Window) {
     }
     #[cfg(not(windows))]
     let _ = window;
+}
+
+fn show_settings_window(window: &winit::window::Window) {
+    // Winit rebuilds extended styles in set_visible and would discard the
+    // opaque layered style needed for affinity readback. Map natively only
+    // after the capture policy is applied, without changing those styles.
+    #[cfg(windows)]
+    unsafe {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOW};
+        if let Ok(handle) = window.window_handle() {
+            if let RawWindowHandle::Win32(handle) = handle.as_raw() {
+                ShowWindow(handle.hwnd.get() as *mut _, SW_SHOW);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    window.set_visible(true);
 }

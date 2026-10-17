@@ -14,6 +14,7 @@ public static class ScreenCueAppTest {
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern int GetWindowText(IntPtr window, StringBuilder title, int maximum);
     [DllImport("user32.dll", SetLastError=true)] public static extern bool GetWindowDisplayAffinity(IntPtr window, out uint affinity);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
     [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr window, int index);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
@@ -35,6 +36,12 @@ public static class ScreenCueAppTest {
             if (SendMessageTimeout(window, 0x7F, new IntPtr(kind), IntPtr.Zero, 2, 1000, out icon) != IntPtr.Zero && icon != IntPtr.Zero) return true;
         }
         return false;
+    }
+    public static bool SetMinimized(IntPtr window, bool minimized) {
+        IntPtr result;
+        // Send the same native system command as the window's minimize/restore
+        // controls, and wait for the owned window procedure to finish handling it.
+        return SendMessageTimeout(window, 0x112, new IntPtr(minimized ? 0xF020 : 0xF120), IntPtr.Zero, 2, 3000, out result) != IntPtr.Zero;
     }
 }
 '@
@@ -69,6 +76,19 @@ function Check-Affinity([IntPtr]$Window, [bool]$Enabled) {
     $expected = if ($Enabled) { 0x11 } else { 0 }
     Assert-That ($value -eq $expected) "Affinity mismatch: expected $expected, observed $value."
 }
+function Wait-OwnedVisible($Process, [IntPtr]$Window) {
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    do {
+        if ($Process.HasExited) { throw ('Owned settings app exited before initialization: ' + $Process.StandardError.ReadToEnd()) }
+        if ([ScreenCueAppTest]::IsWindowVisible($Window)) { return }
+        Start-Sleep -Milliseconds 25
+    } while ($timer.ElapsedMilliseconds -lt 10000)
+    throw 'Owned settings window was not displayed before the initialization deadline.'
+}
+function Check-SettingsPolicy([IntPtr]$Window, [bool]$Enabled) {
+    Assert-That (([ScreenCueAppTest]::GetWindowLong($Window, -20) -band 0x80000) -ne 0) 'Settings window is not layered for verified capture policy.'
+    Check-Affinity $Window $Enabled
+}
 function Send-Owned($Process, [hashtable]$Request) {
     $Process.StandardInput.WriteLine(($Request | ConvertTo-Json -Depth 10 -Compress))
     $Process.StandardInput.Flush()
@@ -99,12 +119,16 @@ try {
         [System.IO.File]::WriteAllText($settingsFile, $preferences, (New-Object System.Text.UTF8Encoding($false)))
         $app = Start-Owned '--app' $settingsFile
         $window = Wait-OwnedWindow $app 'ScreenCue'
-        $timer = [System.Diagnostics.Stopwatch]::StartNew()
-        while (-not [ScreenCueAppTest]::IsWindowVisible($window) -and $timer.ElapsedMilliseconds -lt 3000) { Start-Sleep -Milliseconds 20 }
+        Wait-OwnedVisible $app $window
         Assert-That ([ScreenCueAppTest]::IsWindowVisible($window)) 'Settings window was not displayed.'
-        Assert-That (([ScreenCueAppTest]::GetWindowLong($window, -20) -band 0x80000) -ne 0) 'Settings window is not layered for verified capture policy.'
         Assert-That ([ScreenCueAppTest]::HasIcon($window)) 'Settings window has no app icon.'
-        Check-Affinity $window $enabled
+        Check-SettingsPolicy $window $enabled
+        foreach ($minimized in @($true, $false)) {
+            Assert-That ([ScreenCueAppTest]::SetMinimized($window, $minimized)) 'Owned settings minimize/restore command timed out.'
+            Assert-That ([ScreenCueAppTest]::IsIconic($window) -eq $minimized) 'Owned settings minimize/restore state did not change.'
+            Check-SettingsPolicy $window $enabled
+        }
+        Assert-That ([ScreenCueAppTest]::IsWindowVisible($window)) 'Settings window was not visible after restoring.'
         Assert-That ([ScreenCueAppTest]::PostMessage($window, 0x10, [IntPtr]::Zero, [IntPtr]::Zero)) 'Could not close the owned settings window.'
         Assert-That ($app.WaitForExit(5000)) 'Settings close did not stop its process.'
         Assert-That ($app.ExitCode -eq 0) ('Settings exited with an error: ' + $app.StandardError.ReadToEnd())
@@ -131,12 +155,14 @@ try {
         Stop-Owned $json
         $json = $null
     }
-    Write-Output 'PASS: native settings visibility/icon/close, privacy off/on on both owned windows, standalone prompt, no focus change, idle audio and clean EOF.'
+    Write-Output 'PASS: native settings visibility/icon/minimize/restore/close, privacy off/on on both owned windows, standalone prompt, no focus change, idle audio and clean EOF.'
 }
 finally {
     Stop-Owned $app
     Stop-Owned $json
-    if (Test-Path -LiteralPath $settingsFile) { Remove-Item -LiteralPath $settingsFile }
-    # This owned directory is expected to contain only the one test settings file.
+    foreach ($ownedFile in @($settingsFile, [System.IO.Path]::ChangeExtension($settingsFile, 'dismiss'))) {
+        if (Test-Path -LiteralPath $ownedFile) { Remove-Item -LiteralPath $ownedFile }
+    }
+    # Remove only known test files; an unexpected file keeps the directory intact.
     if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary }
 }

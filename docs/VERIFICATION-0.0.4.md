@@ -10,7 +10,7 @@ This release adds the native settings app and application icon, independent conv
 - Native audio-helper Rust suite: 12 tests passed.
 - MCP lifecycle and live hints passed, including `screen_prompt`, text-only geometry, malformed input, replacement preservation, and clean EOF.
 - Native overlay suite passed: click-through styles, no focus change, persistent hints, local window tracking, minimize/offscreen/restore behavior, animation, hide shortcut, and shutdown.
-- Settings-window test passed: native icon, visibility and close; capture policy exactly `0x11` when enabled and `0x0` when disabled on both settings and overlay windows; no capture or model service started.
+- Settings-window test passed: native icon, visibility, minimize, restore and close; capture policy exactly `0x11` when enabled and `0x0` when disabled on both settings and overlay windows; no capture or model service started.
 - Five independent desktop-process tests passed: shared settings and dismissal across connections, settings loading before first display, conversation defaults and explicit arrow overrides, and Start/Stop/restart through owned UI controls. A synthetic helper emitted a deliberately late hint and deliberately ignored shutdown; the app suppressed that hint and reaped the helper.
 - Native helper process tests use synthetic transcripts, local fake HTTP responses and explicit command fixtures. They cover provider validation before capture, speaker/role fields, independently progressing transcription and suggestions, stale generations, Stop, EOF and command cancellation.
 - Conversation orchestrator tests use bounded fake providers and a local SSE fixture. They cover independent lanes, partial/final revisions, role routing, stale output, prepared candidates, stream cancellation, and fresh observed screen geometry.
@@ -27,7 +27,7 @@ A three-second sample on the development PC observed 0 CPU milliseconds while hi
 
 CI defines Windows x64, macOS Apple Silicon, macOS Intel and Linux x64/X11 builds. It checks both Rust crates, Python suites, native Windows UI/privacy, package contents, Windows installer install/uninstall, Linux user installation/removal, and macOS bundle signatures/disk-image integrity.
 
-Local packaging tests validate explicit public inputs, required licenses, executable bits, metadata and exclusion of private configuration. The macOS symlink case is skipped on this Windows host and runs on Unix CI.
+Local packaging tests validate explicit public inputs, required licenses, executable bits, metadata and exclusion of private configuration. The macOS layout check stubs signing, disk-image generation and symlink creation; native macOS CI performs those operations and verifies the result. Python resources live under `Contents/Resources`, outside the signed native executables directory.
 
 The local Inno Setup bootstrap was blocked by automatic execution review; it was not retried locally. Windows installer compilation and lifecycle verification use the clean CI runner. Final CI results and downloadable artifacts are linked from the release.
 

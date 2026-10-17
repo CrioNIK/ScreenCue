@@ -62,10 +62,19 @@ fn launch_command(path: &Path) -> Result<Command, String> {
     }
     let python=config["python_executable"].as_str().filter(|p|Path::new(p).is_absolute()&&Path::new(p).is_file()).ok_or("Advanced conversation mode needs python_executable set to an installed Python 3.11+ executable's absolute path")?;
     let helper = executable()?;
-    let script = helper
+    let directory = helper
         .parent()
-        .ok_or("Application directory is unavailable")?
-        .join("controller/conversation_orchestrator.py");
+        .ok_or("Application directory is unavailable")?;
+    #[cfg(target_os = "macos")]
+    let directory = if directory.file_name().is_some_and(|name| name == "MacOS") {
+        directory
+            .parent()
+            .ok_or("Application bundle is unavailable")?
+            .join("Resources")
+    } else {
+        directory.to_path_buf()
+    };
+    let script = directory.join("controller/conversation_orchestrator.py");
     if !script.is_file() {
         return Err("Advanced conversation controller is missing from this app package".into());
     }

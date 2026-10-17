@@ -75,9 +75,8 @@ class NativePackageTests(unittest.TestCase):
             for name in ["screencue", "screencue-listen", "install.sh", "uninstall.sh"]:
                 self.assertTrue(archive.getmember("ScreenCue/" + name).mode & 0o111, name)
 
-    @unittest.skipIf(__import__("os").name == "nt", "Symlink creation requires additional Windows privileges")
     def test_macos_bundle_has_audio_permission_purpose_strings_and_sibling_helper(self):
-        with mock.patch.object(PACKAGE.subprocess, "run") as run:
+        with mock.patch.object(PACKAGE.subprocess, "run") as run, mock.patch.object(Path, "symlink_to") as symlink:
             result = self.package("macos-apple-silicon")
         app = Path(result["stage"])
         with (app / "Contents/Info.plist").open("rb") as stream:
@@ -87,7 +86,10 @@ class NativePackageTests(unittest.TestCase):
         self.assertIn("NSMicrophoneUsageDescription", info)
         self.assertIn("NSAudioCaptureUsageDescription", info)
         self.assertTrue((app / "Contents/MacOS/screencue-listen").is_file())
-        self.assertTrue((app / "Contents/MacOS/controller/conversation_orchestrator.py").is_file())
+        self.assertTrue((app / "Contents/Resources/controller/conversation_orchestrator.py").is_file())
+        self.assertFalse((app / "Contents/MacOS/controller").exists())
+        self.assertEqual({p.name for p in (app / "Contents/MacOS").iterdir()}, {"screencue", "screencue-listen"})
+        symlink.assert_called_once_with("/Applications")
         self.assertEqual(run.call_args_list[-1].args[0][0], "hdiutil")
 
 
