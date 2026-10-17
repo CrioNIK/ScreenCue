@@ -85,6 +85,7 @@ jobs:
           ./tests/windows-app.ps1 -Executable "target/${{ matrix.target }}/release/${{ matrix.binary }}"
           $env:SCREENCUE_DESKTOP_BINARY = (Resolve-Path "target/${{ matrix.target }}/release/${{ matrix.binary }}").Path
           python -m unittest discover -s tests -p 'test_desktop_app.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/mcp-smoke.cjs "$env:SCREENCUE_DESKTOP_BINARY" --live
       - name: Package binary and licenses
         run: |
