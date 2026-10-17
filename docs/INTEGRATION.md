@@ -29,7 +29,7 @@ python scripts/integrate.py doctor --client all --scope user
 
 On macOS/Linux, supply an absolute path to `screencue`. Use `--client codex`, `claude-code`, `claude-desktop`, `gemini`, or `cursor` to select one client. `--scope project --root /absolute/project` installs into a project; Claude Desktop supports only user configuration on Windows/macOS. `--dry-run` previews destinations without writing. Existing unrelated settings are preserved; changed files receive adjacent `.screencue-backup-*` copies. Malformed configuration is reported before writing any planned files. Normal client trust prompts still apply; restart or reconnect after setup.
 
-`doctor` launches the configured MCP executable, checks initialization, all four tools, hidden status, and clean shutdown. It does not authenticate to an AI provider or certify that the client's model chooses a tool. Claude Desktop's skill must be uploaded separately through its supported UI.
+`doctor` launches the configured MCP executable, checks initialization, all five tools, hidden status, and clean shutdown. It does not authenticate to an AI provider or certify that the client's model chooses a tool. Claude Desktop's skill must be uploaded separately through its supported UI.
 
 ### Portable packages
 
@@ -132,14 +132,19 @@ The server implements MCP revisions `2025-11-25`, `2025-06-18`, `2025-03-26`, an
 | --- | --- |
 | `screen_displays` | Return physical monitor origins, dimensions, and scale factors |
 | `screen_hint` | Replace this process's cue |
-| `screen_clear` | Hide this process's cue |
+| `screen_prompt` | Show an independent text panel without coordinates or a screen observation |
+| `screen_clear` | Hide cues and stop conversation listening across active connections sharing the settings file |
 | `screen_status` | Return visibility, current hint, process ID, and color source |
 
 Each running `--mcp` process owns its own overlay. A default hint has no expiry timer and remains through clicks and active-window changes. The agent calls `screen_clear` when it should disappear or `screen_hint` to replace it. The user can also press the hide shortcut. Closing stdin ends the owning process and removes its overlay as normal session cleanup. There is no shared daemon, socket, or tray. Separate agents may launch separate instances; coordinate ownership in your client if you want only one cue on screen.
 
-The global hide shortcut is `Ctrl+Alt+X` (`Ctrl+Option+X` on macOS). Override it at process launch, for example `screencue --mcp --hide-shortcut "Ctrl+Shift+X"`. Include Ctrl, Alt/Option, or Super/Command; plain letters and Shift-only shortcuts are rejected. The shortcut is registered only while a cue is visible and released on clear, expiry, or shutdown. `show` replies and status expose `hide_shortcut`, `hide_shortcut_id`, `shortcut_active`, and `shortcut_error`. If another application owns the combination, the cue can still be shown but the conflict is reported; ScreenCue does not silently choose another shortcut. `screen_clear` remains available. A successful shortcut hides the entire cue.
+The global hide shortcut is `Ctrl+Alt+X` (`Ctrl+Option+X` on macOS). Override it at process launch, for example `screencue --mcp --hide-shortcut "Ctrl+Shift+X"`. Include Ctrl, Alt/Option, or Super/Command; plain letters and Shift-only shortcuts are rejected. The shortcut is registered while a cue is visible or a conversation session is active; stopping and clearing releases it. `show` replies and status expose `hide_shortcut`, `hide_shortcut_id`, `shortcut_active`, and `shortcut_error`. If another application owns the combination, the cue can still be shown but the conflict is reported; ScreenCue does not silently choose another shortcut. `screen_clear` remains available. A successful shortcut hides the entire cue.
 
 ### Hint arguments
+
+For conversation notes, call `screen_prompt` with `{"title":"Suggested words","text":"Which milestone matters most to you?"}`. It uses the primary display, without an arrow, target, or local background sampling. Optional `panel_x`, `panel_y`, `panel_width`, `text_page`, and `duration_ms` use the same limits as ordinary hints. The raw JSON equivalent is `{"command":"prompt","text":"..."}`.
+
+Preferences are shared through a local settings file. Visible instances and active conversation sessions check for changes and dismissal signals at a 250 ms interval; idle hidden instances do not poll. A global clear or hide shortcut stops active listening as well as removing hints. This interval is a scheduling target, not a hard timing guarantee. `--settings-file` isolates a connection when separate ownership is needed. `capture_privacy` in show/status reports the native policy, including explicit unsupported and failure states; it never certifies every capture application.
 
 | Field | Meaning |
 | --- | --- |

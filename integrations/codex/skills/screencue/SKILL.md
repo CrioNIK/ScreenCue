@@ -22,3 +22,7 @@ Window movement is followed locally. Scrolling, resizing, and rearranged control
 Hints persist through clicks. Do not set `duration_ms` unless expiry is requested. Replace the hint for the next step; clear it when it is no longer relevant or the user asks. The default hide shortcut is Ctrl+Alt+X (Ctrl+Option+X on macOS); check `shortcut_active` and `shortcut_error` in the show result before promising it works.
 
 The client supplies observation and permissions. This skill does not enable screenshots, computer control, or direct Dot access on a surface that lacks those capabilities.
+
+## Conversation prompts
+
+For a speaking note requested by the user, call `screen_prompt` with `text` and an optional `title` directly. No screenshot or display lookup is needed for a text prompt. Use the user's actual facts; do not invent experience, metrics, or commitments. ScreenCue does not automatically hear this client's conversation. Audio and model providers are configured separately in the desktop app. Capture privacy is controlled by the user; inspect `capture_privacy` and never promise invisibility to every screen-sharing tool. `screen_clear` hides active prompts and stops listening across connections sharing the settings file; the app's Hide all cues button and the hide shortcut notify active connections sharing its settings file.

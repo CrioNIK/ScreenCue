@@ -112,7 +112,7 @@ async function main() {
     client.notify('notifications/unknown', {});
     assert.deepEqual((await client.request('ping')).result, {});
     const listed = (await client.request('tools/list')).result.tools;
-    assert.deepEqual(listed.map(tool => tool.name).sort(), ['screen_clear', 'screen_displays', 'screen_hint', 'screen_status']);
+    assert.deepEqual(listed.map(tool => tool.name).sort(), ['screen_clear', 'screen_displays', 'screen_hint', 'screen_prompt', 'screen_status']);
     const hintSchema = listed.find(tool => tool.name === 'screen_hint').inputSchema;
     assert.equal(hintSchema.properties.duration_ms.default, 0);
     assert.equal(hintSchema.properties.follow_window.default, true);
@@ -215,6 +215,15 @@ async function main() {
       const titleOnly = await client.tool('screen_hint', { x, y, title: 'Heading only', text: '', arrow: false, target: false });
       assert.equal(titleOnly.result.isError, false);
       assert.ok(titleOnly.data.panel.width > 0);
+      const prompt = await client.tool('screen_prompt', {title: 'Conversation', text: 'Ask which milestone matters most.'});
+      assert.equal(prompt.result.isError, false, JSON.stringify(prompt));
+      assert.equal(prompt.data.arrow_tip, null);
+      assert.ok(prompt.data.panel.width > 0);
+      assert.equal(prompt.data.capture_privacy.capture_guaranteed, false);
+      const promptStatus = (await client.tool('screen_status')).data;
+      assert.equal(promptStatus.hint.target, false);
+      assert.equal(promptStatus.hint.follow_window, false);
+      assert.equal((await client.tool('screen_prompt', {text: 'Invalid', arrow:true})).result.isError, true);
       const cleared = await client.tool('screen_clear');
       assert.equal(cleared.result.isError, false);
       assert.equal((await client.tool('screen_status')).data.visible, false);

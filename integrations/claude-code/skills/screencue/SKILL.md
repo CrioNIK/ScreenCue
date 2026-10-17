@@ -15,6 +15,10 @@ Call `screen_hint` with the observed control center as `x` and `y`, its physical
 
 The native tracker follows window movement without model calls. It does not track scrolling or controls rearranged inside a window. Obtain a new observation and replace the hint after those changes or when `screen_status` reports `tracking.state: "needs_refresh"`. A minimized, closed, or offscreen target stays as a labelled edge cue; do not pretend it is a visible control. Avoid repeatedly polling status during ordinary pointing.
 
-For "hide the arrow" or equivalent, call `screen_clear` immediately; no screenshot is needed. The default shortcut is **Ctrl+Alt+X**, or **Ctrl+Option+X** on macOS. Check the `screen_hint` result for `shortcut_active` and `shortcut_error` before claiming the shortcut is available. Do not clear a persistent hint merely because the assistant's turn ends. Each MCP process controls its own cue; clearing in another client does not clear this one.
+For "hide the arrow" or equivalent, call `screen_clear` immediately; no screenshot is needed. The default shortcut is **Ctrl+Alt+X**, or **Ctrl+Option+X** on macOS. Check the `screen_hint` result for `shortcut_active` and `shortcut_error` before claiming the shortcut is available. Do not clear a persistent hint merely because the assistant's turn ends. Each MCP process draws its own cue; clear and the hide shortcut also notify active connections sharing the same settings file.
 
 If the tools are missing or a call fails, report the failure. Do not say an arrow is visible without a successful result.
+
+## Conversation prompts
+
+For a speaking note requested by the user, call `screen_prompt` with `text` and an optional `title` directly. No screenshot or display lookup is needed for a text prompt. Use the user's actual facts; do not invent experience, metrics, or commitments. ScreenCue does not automatically hear this client's conversation. Audio and model providers are configured separately in the desktop app. Capture privacy is controlled by the user; inspect `capture_privacy` and never promise invisibility to every screen-sharing tool. `screen_clear` hides active prompts and stops listening across connections sharing the settings file; the app's Hide all cues button and the hide shortcut notify active connections sharing its settings file.

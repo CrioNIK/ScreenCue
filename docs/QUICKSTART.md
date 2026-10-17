@@ -1,4 +1,4 @@
-# ScreenCue 0.0.3
+# ScreenCue 0.0.4
 
 AI-guided arrows over your desktop. One native executable, with no Rust, Node.js, or .NET installation required to run it.
 

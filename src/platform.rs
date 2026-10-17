@@ -6,6 +6,82 @@
 
 use winit::window::Window;
 
+/// This verifies an operating-system window policy, not the output of a sharing
+/// application. A capture program or capture device can use a different path.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct CapturePrivacyStatus {
+    pub requested: bool,
+    pub supported: bool,
+    pub applied: bool,
+    pub verified: bool,
+    pub backend: &'static str,
+    pub capture_guaranteed: bool,
+    pub error: Option<String>,
+    pub note: &'static str,
+}
+
+/// Capability only: no policy is applied until `set_capture_exclusion` is called
+/// for a particular top-level window. New windows need their own policy.
+pub fn capture_privacy_capability() -> CapturePrivacyStatus {
+    #[cfg(target_os = "windows")]
+    {
+        imp::capture_privacy_capability()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        unsupported_capture_privacy(false)
+    }
+}
+
+/// Call after preparing the native presenter and before making the window
+/// visible. Changing this policy does not activate, map, or hide the window.
+pub fn set_capture_exclusion(window: &Window, requested: bool) -> CapturePrivacyStatus {
+    #[cfg(target_os = "windows")]
+    {
+        imp::set_capture_exclusion(window, requested)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+        unsupported_capture_privacy(requested)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn unsupported_capture_privacy(requested: bool) -> CapturePrivacyStatus {
+    let note = if cfg!(target_os = "macos") {
+        "macOS has no supported window opt-out from other applications' ScreenCaptureKit capture. Share a selected application window and verify the receiver's view."
+    } else {
+        "This display backend has no supported per-window capture exclusion. Share a selected application window and verify the receiver's view."
+    };
+    CapturePrivacyStatus {
+        requested,
+        supported: false,
+        applied: false,
+        verified: false,
+        backend: "unsupported",
+        capture_guaranteed: false,
+        error: requested.then(|| "Capture exclusion is unavailable on this platform".to_owned()),
+        note,
+    }
+}
+
+#[cfg(all(test, not(target_os = "windows")))]
+mod capture_privacy_tests {
+    #[test]
+    fn unsupported_platform_never_claims_capture_exclusion() {
+        for requested in [false, true] {
+            let status = super::unsupported_capture_privacy(requested);
+            assert_eq!(status.requested, requested);
+            assert!(!status.supported);
+            assert!(!status.applied);
+            assert!(!status.verified);
+            assert!(!status.capture_guaranteed);
+            assert_eq!(status.error.is_some(), requested);
+        }
+    }
+}
+
 /// Mapping a native window is not evidence that a game's presentation path
 /// composites it. Keep that distinction visible to clients on every platform.
 pub fn presentation_status(window_mapped: bool) -> serde_json::Value {
@@ -186,12 +262,13 @@ mod imp {
     use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetAncestor, GetClassNameW, GetDesktopWindow, GetPropW, GetShellWindow, GetTopWindow,
-        GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow,
-        IsWindowVisible, RemovePropW, SetPropW, SetWindowLongPtrW, SetWindowPos,
-        UpdateLayeredWindow, EVENT_OBJECT_REORDER, EVENT_OBJECT_SHOW, EVENT_SYSTEM_FOREGROUND,
-        GA_ROOT, GWL_EXSTYLE, GW_HWNDNEXT, GW_HWNDPREV, HWND_TOPMOST, OBJID_CLIENT, OBJID_WINDOW,
-        SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, ULW_ALPHA,
-        WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WS_EX_APPWINDOW, WS_EX_LAYERED,
+        GetWindow, GetWindowDisplayAffinity, GetWindowLongPtrW, GetWindowRect,
+        GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, RemovePropW, SetPropW,
+        SetWindowDisplayAffinity, SetWindowLongPtrW, SetWindowPos, UpdateLayeredWindow,
+        EVENT_OBJECT_REORDER, EVENT_OBJECT_SHOW, EVENT_SYSTEM_FOREGROUND, GA_ROOT, GWL_EXSTYLE,
+        GW_HWNDNEXT, GW_HWNDPREV, HWND_TOPMOST, OBJID_CLIENT, OBJID_WINDOW, SWP_HIDEWINDOW,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, ULW_ALPHA, WDA_EXCLUDEFROMCAPTURE,
+        WDA_NONE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WS_EX_APPWINDOW, WS_EX_LAYERED,
         WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
     };
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -202,6 +279,214 @@ mod imp {
 
     const OVERLAY_PROPERTY: windows_sys::core::PCWSTR =
         windows_sys::core::w!("ScreenCue.Overlay.v1");
+
+    #[repr(C)]
+    struct RtlOsVersionInfo {
+        size: u32,
+        major: u32,
+        minor: u32,
+        build: u32,
+        platform: u32,
+        service_pack: [u16; 128],
+    }
+
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn RtlGetVersion(version: *mut RtlOsVersionInfo) -> i32;
+    }
+
+    fn supports_capture_exclusion(major: u32, build: u32) -> bool {
+        major > 10 || (major == 10 && build >= 19041)
+    }
+
+    pub(super) fn capture_privacy_capability() -> super::CapturePrivacyStatus {
+        let mut status = super::CapturePrivacyStatus {
+            requested: false,
+            supported: false,
+            applied: false,
+            verified: false,
+            backend: "win32_display_affinity",
+            capture_guaranteed: false,
+            error: None,
+            note: "Exclusion applies to compatible Windows capture APIs. The sharing application's output has not been verified; check the receiver's view before use.",
+        };
+        // RtlGetVersion avoids the compatibility-manifest version lie. Older
+        // Windows maps 0x11 to WDA_MONITOR, which leaves a blank captured window
+        // rather than omitting it; never advertise that as capture exclusion.
+        let mut version: RtlOsVersionInfo = unsafe { zeroed() };
+        version.size = size_of::<RtlOsVersionInfo>() as u32;
+        let result = unsafe { RtlGetVersion(&mut version) };
+        if result < 0 {
+            status.error = Some(format!(
+                "RtlGetVersion failed: NTSTATUS 0x{:08X}",
+                result as u32
+            ));
+        } else if supports_capture_exclusion(version.major, version.build) {
+            status.supported = true;
+        } else {
+            status.note = "Capture exclusion requires Windows 10 version 2004 (build 19041) or newer. No blank-window fallback is applied.";
+        }
+        status
+    }
+
+    pub(super) fn set_capture_exclusion(
+        window: &Window,
+        requested: bool,
+    ) -> super::CapturePrivacyStatus {
+        let status = capture_privacy_capability();
+        match hwnd(window) {
+            Ok(handle) => apply_capture_exclusion(handle, requested, status),
+            Err(error) => super::CapturePrivacyStatus {
+                requested,
+                error: Some(error),
+                ..status
+            },
+        }
+    }
+
+    fn apply_capture_exclusion(
+        window: HWND,
+        requested: bool,
+        mut status: super::CapturePrivacyStatus,
+    ) -> super::CapturePrivacyStatus {
+        status.requested = requested;
+        if requested && !status.supported {
+            if status.error.is_none() {
+                status.error =
+                    Some("Capture exclusion requires Windows build 19041 or newer".into());
+            }
+            return status;
+        }
+        let wanted = if requested {
+            WDA_EXCLUDEFROMCAPTURE
+        } else {
+            WDA_NONE
+        };
+        let set_error = if unsafe { SetWindowDisplayAffinity(window, wanted) } == 0 {
+            Some(failure("SetWindowDisplayAffinity"))
+        } else {
+            None
+        };
+        let mut observed = WDA_NONE;
+        // A successful GetWindowDisplayAffinity also verifies DWM composition.
+        // DwmIsCompositionEnabled can report false for a composed desktop when
+        // the executable lacks a Windows-8 compatibility manifest.
+        if unsafe { GetWindowDisplayAffinity(window, &mut observed) } == 0 {
+            status.error = Some(set_error.unwrap_or_else(|| failure("GetWindowDisplayAffinity")));
+            return status;
+        }
+        status.applied = status.supported && observed == WDA_EXCLUDEFROMCAPTURE;
+        status.verified = set_error.is_none() && observed == wanted;
+        status.error = set_error.or_else(|| {
+            (observed != wanted).then(|| {
+                format!("Window display affinity mismatch: requested 0x{wanted:08X}, observed 0x{observed:08X}")
+            })
+        });
+        status
+    }
+
+    #[cfg(test)]
+    mod capture_tests {
+        use super::*;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, GetForegroundWindow, WS_POPUP,
+        };
+
+        #[test]
+        fn exclusion_gate_does_not_accept_legacy_blank_window_behavior() {
+            assert!(!supports_capture_exclusion(6, 99999));
+            assert!(!supports_capture_exclusion(10, 19040));
+            assert!(supports_capture_exclusion(10, 19041));
+            assert!(supports_capture_exclusion(10, 26100));
+            assert!(supports_capture_exclusion(11, 1));
+        }
+
+        #[test]
+        fn unsupported_exclusion_does_not_claim_applied_or_verified() {
+            let mut capability = capture_privacy_capability();
+            capability.supported = false;
+            capability.error = None;
+            let status = apply_capture_exclusion(null_mut(), true, capability);
+            assert!(status.requested);
+            assert!(!status.applied);
+            assert!(!status.verified);
+            assert!(!status.capture_guaranteed);
+            assert!(status.error.unwrap().contains("19041"));
+        }
+
+        #[test]
+        fn invalid_window_reports_native_failure_instead_of_enabled() {
+            let mut capability = capture_privacy_capability();
+            capability.supported = true;
+            let status = apply_capture_exclusion(null_mut(), true, capability);
+            assert!(!status.applied);
+            assert!(!status.verified);
+            assert!(status
+                .error
+                .unwrap()
+                .starts_with("SetWindowDisplayAffinity"));
+        }
+
+        #[test]
+        fn owned_hidden_layered_window_can_enable_verify_and_disable_exclusion() {
+            let capability = capture_privacy_capability();
+            if !capability.supported {
+                eprintln!(
+                    "Native capture policy test unavailable: {}",
+                    capability.note
+                );
+                return;
+            }
+            let foreground = unsafe { GetForegroundWindow() };
+            // A hidden test-owned top-level window: no screen pixels are read,
+            // no user window is altered, and no keyboard focus is requested.
+            let handle = unsafe {
+                CreateWindowExW(
+                    WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                    windows_sys::core::w!("STATIC"),
+                    windows_sys::core::w!("ScreenCue capture policy test"),
+                    WS_POPUP,
+                    0,
+                    0,
+                    64,
+                    64,
+                    null_mut(),
+                    null_mut(),
+                    null_mut(),
+                    null(),
+                )
+            };
+            assert!(!handle.is_null(), "{}", failure("CreateWindowExW"));
+            struct OwnedWindow(HWND);
+            impl Drop for OwnedWindow {
+                fn drop(&mut self) {
+                    unsafe { DestroyWindow(self.0) };
+                }
+            }
+            let owned = OwnedWindow(handle);
+            let enabled = apply_capture_exclusion(owned.0, true, capability.clone());
+            assert!(enabled.applied && enabled.verified, "{enabled:?}");
+            assert!(enabled.error.is_none());
+            assert!(!enabled.capture_guaranteed);
+            let mut observed = 0;
+            assert_ne!(
+                unsafe { GetWindowDisplayAffinity(owned.0, &mut observed) },
+                0
+            );
+            assert_eq!(observed, WDA_EXCLUDEFROMCAPTURE);
+            assert_eq!(unsafe { IsWindowVisible(owned.0) }, 0);
+            let disabled = apply_capture_exclusion(owned.0, false, capability);
+            assert!(!disabled.applied && disabled.verified, "{disabled:?}");
+            assert!(disabled.error.is_none());
+            assert_ne!(
+                unsafe { GetWindowDisplayAffinity(owned.0, &mut observed) },
+                0
+            );
+            assert_eq!(observed, WDA_NONE);
+            assert_eq!(unsafe { IsWindowVisible(owned.0) }, 0);
+            assert_eq!(unsafe { GetForegroundWindow() }, foreground);
+        }
+    }
 
     fn cloaked(window: HWND) -> bool {
         let mut value = 0u32;

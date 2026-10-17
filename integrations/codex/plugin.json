@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "screencue",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Point to desktop controls with persistent, click-through sketch arrows.",
   "author": { "name": "CrioNIK", "url": "https://github.com/CrioNIK" },
   "homepage": "https://github.com/CrioNIK/ScreenCue",

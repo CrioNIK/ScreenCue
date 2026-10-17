@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "screencue",
   "display_name": "ScreenCue",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Persistent, click-through desktop arrows controlled directly by your assistant.",
   "long_description": "ScreenCue draws a large hand-drawn arrow and an independent target outline without taking focus. It follows the target application window locally and keeps a labelled edge cue when the target moves offscreen. Hide a hint with screen_clear or Ctrl+Alt+X (Ctrl+Option+X on macOS). ScreenCue does not capture screenshots, identify controls, click, or type. The assistant needs a separate authorized passive screen observation tool. Adaptive color may sample small local pixel regions while visible; those pixels are never saved or transmitted. No API key, network server, Node.js, or Python runtime is required for this binary extension.",
   "author": { "name": "CrioNIK", "url": "https://github.com/CrioNIK" },

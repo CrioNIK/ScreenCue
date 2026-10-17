@@ -23,7 +23,7 @@ import zipfile
 REPO = Path(__file__).resolve().parents[1]
 CLIENTS = ("codex", "claude-code", "claude-desktop", "gemini", "cursor")
 PLATFORMS = ("windows-x64", "macos-apple-silicon", "macos-intel", "linux-x64-x11")
-TOOLS = {"screen_displays", "screen_hint", "screen_clear", "screen_status"}
+TOOLS = {"screen_displays", "screen_hint", "screen_prompt", "screen_clear", "screen_status"}
 
 
 def read_json(path: Path) -> dict:

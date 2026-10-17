@@ -4,16 +4,22 @@ Bold, hand-drawn arrows and light outlines **over your desktop**. An AI agent ca
 
 Ask by voice or text. The agent calls `screen_hint`, and you click the control yourself. Hints let mouse input pass through and never take keyboard focus. A separate dark text panel is optional.
 
-<img src="assets/screencue-punk.png" alt="ScreenCue" width="120">
+<img src="assets/app-icon-256.png" alt="ScreenCue" width="120">
 
-**Rust · Windows / macOS / Linux X11 · Local MCP · MIT · Preview 0.0.3**
+**Rust · Windows / macOS / Linux X11 · Local MCP · MIT · Preview 0.0.4**
 
 Early releases follow the [`0.0.x` versioning policy](docs/VERSIONING.md); small follow-up revisions use letter suffixes.
 
 ![Actual native renderer: short hints, paginated text, and independent panels on light and dark backgrounds](docs/panels-preview.png)
 
+![Native desktop settings](docs/settings-appearance.png)
+
 ## Features
 
+- A native desktop settings window, app icon, and installable desktop packages. Open ScreenCue normally to configure appearance, privacy, and conversation assistance.
+- Independent speaking notes through `screen_prompt`: agents can send text immediately without a screenshot or coordinate lookup.
+- Optional microphone and system-audio transcription, explicit speaker-role mappings, and local or hosted model adapters. Capture starts only after pressing **Start**. See [conversation setup](conversation/README.md) and the [independent fast/decision/planning lanes](controller/CONVERSATION.md).
+- Optional Windows screen-capture exclusion, with native flag verification. macOS/Linux report unsupported; no sharing application is assumed to honor it. See [capture privacy](docs/CAPTURE-PRIVACY.md).
 - A large, crooked SKETCH arrow made from four hand-drawn animation frames. Its tip stops **12 px before the target**, scaled for display density.
 - Independent arrow and target outline. Use an ellipse, rectangle, rounded rectangle, or polygon; outlines have no fill.
 - Red is the primary color. Automatic contrast can select another color when red blends into the background, then return to red when suitable.
@@ -27,6 +33,8 @@ ScreenCue draws hints; it does not identify controls, capture screenshots for ag
 
 ## Download and run
 
+For the full app, choose the **Windows setup EXE**, **macOS DMG**, or **Linux app archive** from [Releases](https://github.com/CrioNIK/ScreenCue/releases). These include the settings app and optional native audio helper. [Installation details](docs/INSTALL.md) cover per-user setup, permissions, and removal. The smaller renderer-only archives below remain available for MCP clients.
+
 1. Download the archive for your platform from [Releases](https://github.com/CrioNIK/ScreenCue/releases).
 
    | Platform | Archive |
@@ -37,7 +45,7 @@ ScreenCue draws hints; it does not identify controls, capture screenshots for ag
    | Linux x64 / X11 | `screencue-linux-x64-x11.tar.gz` |
 
 2. Extract it to a permanent location, such as `C:\Tools\ScreenCue` on Windows. On macOS/Linux, use a directory in your home folder and run `chmod +x ./screencue` if needed.
-3. Try the demo, then [connect your agent](#connect-your-agent). The client launches ScreenCue during normal use.
+3. Open `screencue` (or `screencue --app`) for settings, then [connect your agent](#connect-your-agent). The client launches its own ScreenCue connection during normal use.
 
 The native executable needs no Rust, Node.js, .NET, or embedded browser to run. The archive includes license notices.
 
@@ -58,17 +66,17 @@ On macOS/Linux, use `./screencue` instead of `.\screencue.exe`.
 
 Hints have **no timeout by default** (`duration_ms: 0`). An agent can clear or replace its hint, and you can hide it with the shortcut. A standalone `show` command stays running until the shortcut is pressed or its process ends. Use `--duration-ms 8000` when an explicit timeout is wanted. Closing an MCP/JSON connection stops its process and removes its hint. There is no tray icon.
 
-Set `--hide-shortcut "Ctrl+Alt+X"` when launching ScreenCue, including with `--mcp` or `--json`, to choose a shortcut. It is registered only while a hint is visible. A conflict does not prevent the hint from appearing: the command response and status report `shortcut_error` so you can choose another combination.
+Set `--hide-shortcut "Ctrl+Alt+X"` when launching ScreenCue, including with `--mcp` or `--json`, to choose a shortcut. It is registered while a hint is visible or a conversation session is active. A conflict does not prevent the hint from appearing: the command response and status report `shortcut_error` so you can choose another combination.
 
 Set `--follow-window false` for fixed desktop coordinates; the demo uses this mode. `--animate false` freezes both drawings while allowing window tracking. `--arrow-scale` accepts 0.75–2.5, with a default of 1.6.
 
 ## Connect your agent
 
-ScreenCue includes integration packages and agent guidance for **Codex, Claude, Gemini, and Cursor**. Start with the [integration guide](docs/INTEGRATION.md), then follow the relevant [client guide](docs/clients/). Native plugin, extension, skill, and configuration formats differ between clients. The [0.0.3 verification report](docs/VERIFICATION-0.0.3.md) covers this build; the [earlier client verification record](docs/VERIFICATION.md) distinguishes actual client sessions from package validation.
+ScreenCue includes integration packages and agent guidance for **Codex, Claude, Gemini, and Cursor**. Start with the [integration guide](docs/INTEGRATION.md), then follow the relevant [client guide](docs/clients/). Native plugin, extension, skill, and configuration formats differ between clients. The [0.0.4 verification report](docs/VERIFICATION-0.0.4.md) covers this build; the [earlier client verification record](docs/VERIFICATION.md) distinguishes actual client sessions from package validation.
 
 The client must launch a local `stdio` MCP process in your graphical desktop session. A cloud chat or voice interface does not gain desktop access merely because the MCP server is configured. Direct Dot/Alt access depends on that environment exposing local tools; it is not assumed.
 
-The tools are `screen_displays`, `screen_hint`, `screen_clear`, and `screen_status`. Each MCP process owns one hint. For a custom agent without MCP, use `--json` with the same hint model.
+The tools are `screen_displays`, `screen_hint`, `screen_prompt`, `screen_clear`, and `screen_status`. Each MCP process owns one hint. For a custom agent without MCP, use `--json` with the same hint model.
 
 The agent guidance prioritizes a short path: **observe the current screen → show the hint immediately → give a brief explanation**. It must not open, activate, or switch windows to locate a control. An observation tool is separate from ScreenCue and must already be available to the client.
 
@@ -98,7 +106,7 @@ For `color: "auto"`, the agent can supply up to 16 `background_colors` from its 
 
 Automatic color prefers red `#EF232D`, changes it when contrast is poor, and returns to red when suitable. The response reports `color_source` and any fallback reason. An explicit `#RRGGBB` disables sampling and keeps that color. A single color cannot guarantee contrast against every moving background pixel.
 
-The native executable has no network server, telemetry, or model requests. A client's handling of its own observations is controlled by that client. The fonts, brush texture, and four arrow frames are embedded; the README logo is documentation-only artwork. The optional controller makes requests only to explicitly configured providers. See [latency measurements](docs/LATENCY.md) for the scope of measured native improvements.
+The native executable has no network server, telemetry, or model requests. A client's handling of its own observations is controlled by that client. The fonts, brush texture, and four arrow frames are embedded; the application icon is used by the native settings window and installers. The optional audio helper and controllers make requests only to explicitly configured providers. See [latency measurements](docs/LATENCY.md) for the scope of measured native improvements.
 
 ## Build and test
 

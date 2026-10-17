@@ -1,0 +1,28 @@
+{
+  "engine": "conversation-orchestrator",
+  "python_executable": "",
+  "helper_config": null,
+  "assisted_role": "presenter",
+  "language": "Use the conversation language",
+  "objective": "Help me explain my supplied facts clearly and ask relevant follow-up questions.",
+  "facts": {},
+  "speaker_roles": {},
+  "source_roles": {},
+  "fast": null,
+  "planner": null,
+  "decider": null,
+  "policy": {
+    "fast_timeout_ms": 1800,
+    "planner_timeout_ms": 8000,
+    "decider_timeout_ms": 500,
+    "hint_ttl_ms": 6000,
+    "plan_ttl_ms": 30000,
+    "planner_interval_ms": 3000,
+    "max_history_chars": 12000,
+    "max_turns": 32,
+    "max_candidates": 12,
+    "max_output_chars": 2000,
+    "max_prompt_chars": 28000,
+    "min_confidence": 0.7
+  }
+}

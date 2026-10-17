@@ -49,7 +49,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libx11-dev libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libxrandr-dev
+          sudo apt-get install --no-install-recommends -y libx11-dev libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libxrandr-dev libasound2-dev libssl-dev
       - name: Install Rust
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt
@@ -60,11 +60,32 @@ jobs:
       - name: Integration and optional controller tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Check formatting
-        run: cargo +stable fmt --check
+        run: |
+          cargo +stable fmt --check
+          cargo +stable fmt --manifest-path conversation/Cargo.toml --check
       - name: Unit tests
         run: cargo +stable test --locked
+      - name: Conversation helper tests
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '14.2'
+        run: |
+          cargo +stable test --manifest-path conversation/Cargo.toml --locked
+          cargo +stable build --manifest-path conversation/Cargo.toml --locked
+          python -m unittest discover -s tests -p 'test_conversation.py' -v
       - name: Release build
         run: cargo +stable build --release --target "${{ matrix.target }}" --locked
+      - name: Conversation helper release build
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '14.2'
+        run: cargo +stable build --release --manifest-path conversation/Cargo.toml --target "${{ matrix.target }}" --locked
+      - name: Native Windows app and privacy policy smoke test
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./tests/windows-app.ps1 -Executable "target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          $env:SCREENCUE_DESKTOP_BINARY = (Resolve-Path "target/${{ matrix.target }}/release/${{ matrix.binary }}").Path
+          python -m unittest discover -s tests -p 'test_desktop_app.py' -v
+          node tests/mcp-smoke.cjs "$env:SCREENCUE_DESKTOP_BINARY" --live
       - name: Package binary and licenses
         run: |
           mkdir -p package/licenses
@@ -82,6 +103,34 @@ jobs:
         run: |
           python scripts/integrate.py bundle --client all --executable "target/${{ matrix.target }}/release/${{ matrix.binary }}" --platform "${{ matrix.artifact }}" --output dist/integrations
           python scripts/package_integrations.py --input dist/integrations --output "screencue-integrations-${{ matrix.artifact }}.zip"
+      - name: Package desktop application
+        run: |
+          helper=screencue-listen
+          if [ "${{ runner.os }}" = 'Windows' ]; then helper=screencue-listen.exe; fi
+          python packaging/package_app.py --platform "${{ matrix.artifact }}" --overlay "target/${{ matrix.target }}/release/${{ matrix.binary }}" --helper "conversation/target/${{ matrix.target }}/release/$helper"
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (Get-Content dist/app/windows-x64/ScreenCue/package.json | ConvertFrom-Json).version
+          ./packaging/windows/build-installer.ps1 -Stage dist/app/windows-x64/ScreenCue -Output dist/app -Version $version -CompilerCache "$env:RUNNER_TEMP/ScreenCue-InnoSetup"
+      - name: Test Windows installer lifecycle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem dist/app/*-setup.exe).FullName
+          ./packaging/windows/test-installer.ps1 -Installer $installer -TestRoot "$env:RUNNER_TEMP/ScreenCue-installer-test"
+      - name: Test Linux user install lifecycle
+        if: runner.os == 'Linux'
+        run: |
+          export XDG_DATA_HOME="$RUNNER_TEMP/ScreenCue-app-test-data"
+          sh dist/app/linux-x64-x11/ScreenCue/install.sh
+          "$XDG_DATA_HOME/ScreenCue/screencue" --version
+          "$XDG_DATA_HOME/ScreenCue/screencue-listen" --version
+          test -f "$XDG_DATA_HOME/applications/screencue.desktop"
+          sh "$XDG_DATA_HOME/ScreenCue/uninstall.sh"
+          test ! -e "$XDG_DATA_HOME/ScreenCue"
+          test ! -e "$XDG_DATA_HOME/applications/screencue.desktop"
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
@@ -90,5 +139,8 @@ jobs:
             screencue-${{ matrix.artifact }}.tar.gz
             screencue-${{ matrix.artifact }}.zip
             screencue-integrations-${{ matrix.artifact }}.zip
+            dist/app/ScreenCue-*-setup.exe
+            dist/app/ScreenCue-*.dmg
+            dist/app/ScreenCue-*-app.tar.gz
           if-no-files-found: error
           retention-days: 14

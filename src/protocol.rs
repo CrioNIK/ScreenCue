@@ -255,6 +255,7 @@ fn handle_message<F: Fn(Command) -> Result<(), String>>(
             let name = parameters.get("name").and_then(Value::as_str);
             let command = match name {
                 Some("screen_hint") => "show",
+                Some("screen_prompt") => "prompt",
                 Some("screen_clear") => "clear",
                 Some("screen_status") => "status",
                 Some("screen_displays") => "displays",
@@ -265,7 +266,7 @@ fn handle_message<F: Fn(Command) -> Result<(), String>>(
                 Some(Value::Object(arguments)) => arguments.clone(),
                 _ => return Some(error(id, -32602, "arguments must be an object.")),
             };
-            if command != "show" && !arguments.is_empty() {
+            if command != "show" && command != "prompt" && !arguments.is_empty() {
                 return Some(error(id, -32602, "This tool does not accept arguments."));
             }
             if arguments.contains_key("command") {
@@ -339,7 +340,20 @@ pub fn tool_definitions() -> Value {
             "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false}
         },
         {
-            "name": "screen_clear", "description": "Remove the current desktop hint.",
+            "name": "screen_prompt",
+            "description": "Show an independent text prompt on the primary display, without an arrow, target, screenshot, coordinate lookup, or focus change. Useful for live conversation cues supplied by any agent. Replaces this connection's current hint. The user controls capture privacy in the desktop app; inspect capture_privacy status rather than assuming invisibility. Do not invent facts about the user.",
+            "inputSchema": {"type":"object","properties":{
+                "title":{"type":"string","maxLength":100},
+                "text":{"type":"string","maxLength":16000},
+                "text_page":{"type":"integer","minimum":0,"maximum":u32::MAX},
+                "panel_width":{"type":"integer","minimum":120,"maximum":4000},
+                "panel_x":coordinate,"panel_y":coordinate,
+                "duration_ms":{"type":"integer","default":0,"anyOf":[{"const":0},{"minimum":500,"maximum":300000}]}
+            },"required":["text"],"additionalProperties":false},
+            "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}
+        },
+        {
+            "name": "screen_clear", "description": "Hide cues and stop conversation listening in active ScreenCue connections sharing this user's settings file. Local cleanup is immediate; sibling connections react within their visible-only polling interval.",
             "inputSchema": empty_schema,
             "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
         },

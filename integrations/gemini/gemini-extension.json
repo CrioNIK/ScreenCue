@@ -1,6 +1,6 @@
 {
   "name": "screencue",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Point to desktop controls with persistent, click-through sketch arrows.",
   "mcpServers": {
     "screencue": {

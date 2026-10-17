@@ -43,7 +43,7 @@ Ask: `Use $screencue to show me where to click on my current screen.`
 
 The agent needs its own permitted passive screen-observation tool. ScreenCue never opens or switches applications to find a target. If the client has no screen access, it can still run `screen_displays` and `screen_status`, but cannot identify an unseen control.
 
-Check that all four tools appear: `screen_displays`, `screen_hint`, `screen_status`, and `screen_clear`. Show one hint on an observed target, move its window, then ask to clear it. Ctrl+Alt+X hides it by default; macOS uses Ctrl+Option+X. Observe any shortcut-registration error returned by the server.
+Check that all five tools appear: `screen_displays`, `screen_hint`, `screen_prompt`, `screen_status`, and `screen_clear`. Show one hint on an observed target, move its window, then ask to clear it. Ctrl+Alt+X hides it by default; macOS uses Ctrl+Option+X. Observe any shortcut-registration error returned by the server.
 
 ## Dot and remote sessions
 

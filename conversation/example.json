@@ -1,0 +1,16 @@
+{
+  "capture": {
+    "microphone": true,
+    "system_audio": true,
+    "microphone_device": null,
+    "system_audio_device": null,
+    "chunk_ms": 2400,
+    "silence_ms": 350,
+    "silence_threshold": 0.006
+  },
+  "transcription": null,
+  "suggestion": null,
+  "context": "Add your own accurate facts, goals and preferred answer language. Configure transcription and suggestion providers before starting.",
+  "speaker_roles": {},
+  "source_roles": {}
+}

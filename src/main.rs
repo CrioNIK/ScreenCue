@@ -1,10 +1,14 @@
 #![recursion_limit = "256"]
 #![cfg_attr(all(target_os = "windows", not(test)), windows_subsystem = "windows")]
 mod color;
+mod desktop_app;
+mod listener;
 mod model;
 mod platform;
 mod protocol;
 mod renderer;
+mod settings;
+mod settings_ui;
 mod shortcut;
 mod tracking;
 
@@ -21,13 +25,14 @@ use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
     event::WindowEvent,
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     window::{Window, WindowId, WindowLevel},
 };
 
 enum Event {
     Command(protocol::Command),
     HideShortcut(u32),
+    Conversation(u64, Value),
     Quit,
 }
 struct Animation {
@@ -65,6 +70,19 @@ struct App {
     color_note: Option<String>,
     shortcut: Option<shortcut::Shortcut>,
     animation: Option<Animation>,
+    preferences: settings::Settings,
+    preferences_path: std::path::PathBuf,
+    settings_window: Option<settings_ui::SettingsWindow>,
+    show_settings: bool,
+    capture_privacy: platform::CapturePrivacyStatus,
+    settings_privacy: Option<platform::CapturePrivacyStatus>,
+    listener: Option<listener::Listener>,
+    listener_epoch: u64,
+    conversation_state: String,
+    notice: String,
+    proxy: Option<EventLoopProxy<Event>>,
+    preferences_check: Option<Instant>,
+    dismiss_token: String,
 }
 impl App {
     fn new(once: bool, initial: Option<Value>) -> Result<Self, String> {
@@ -86,6 +104,19 @@ impl App {
             color_note: None,
             shortcut: None,
             animation: None,
+            preferences: settings::Settings::default(),
+            preferences_path: settings::default_path()?,
+            settings_window: None,
+            show_settings: false,
+            capture_privacy: platform::capture_privacy_capability(),
+            settings_privacy: None,
+            listener: None,
+            listener_epoch: 0,
+            conversation_state: "Stopped".into(),
+            notice: String::new(),
+            proxy: None,
+            preferences_check: None,
+            dismiss_token: String::new(),
         })
     }
     fn tracking_status(&self) -> Value {
@@ -105,15 +136,20 @@ impl App {
         self.tracking_note = None;
         self.expiry = None;
         self.animation = None;
-        if let Some(shortcut) = &mut self.shortcut {
-            shortcut.unregister();
+        if self.listener.is_none() {
+            if let Some(shortcut) = &mut self.shortcut {
+                shortcut.unregister();
+            }
         }
     }
     fn dispatch(&mut self, event_loop: &ActiveEventLoop, request: Value) -> Value {
-        match self.execute(event_loop, request) {
+        let result = match self.execute(event_loop, request) {
             Ok(value) => value,
             Err(error) => json!({"ok":false,"error":error}),
-        }
+        };
+        self.schedule_preferences();
+        self.refresh_ui();
+        result
     }
     fn update_tracking(&mut self, event_loop: &ActiveEventLoop) -> Result<(), String> {
         let Some(tracker) = self.tracking.as_mut() else {
@@ -289,14 +325,19 @@ impl App {
                 )
             }
             "clear" => {
+                self.broadcast_dismiss();
+                self.stop_conversation();
                 self.clear();
                 Ok(json!({"ok":true,"visible":false}))
             }
             "status" => Ok(
-                json!({"ok":true,"version":env!("CARGO_PKG_VERSION"),"visible":self.frame.is_some(),"hint":self.hint,"tracking":self.tracking_status(),"rendered_target":self.render_hint.as_ref().map(Hint::anchor),"arrow_tip":self.frame.as_ref().and_then(|f|f.arrow_tip),"panel":self.frame.as_ref().and_then(|f|f.panel),"presentation":platform::presentation_status(self.frame.is_some()),"color_source":self.color_source,"color_note":self.color_note,"color":self.animation.as_ref().map(|a|color_hex(a.color)),"hide_shortcut":self.shortcut.as_ref().map(|s|&s.name),"hide_shortcut_id":self.shortcut.as_ref().map(|s|s.id()),"shortcut_active":self.shortcut.as_ref().is_some_and(|s|s.active()),"shortcut_error":self.shortcut.as_ref().and_then(|s|s.error.as_ref()),"pid":std::process::id()}),
+                json!({"ok":true,"version":env!("CARGO_PKG_VERSION"),"visible":self.frame.is_some(),"hint":self.hint,"tracking":self.tracking_status(),"rendered_target":self.render_hint.as_ref().map(Hint::anchor),"arrow_tip":self.frame.as_ref().and_then(|f|f.arrow_tip),"panel":self.frame.as_ref().and_then(|f|f.panel),"capture_privacy":self.capture_privacy,"conversation_state":self.conversation_state,"presentation":platform::presentation_status(self.frame.is_some()),"color_source":self.color_source,"color_note":self.color_note,"color":self.animation.as_ref().map(|a|color_hex(a.color)),"hide_shortcut":self.shortcut.as_ref().map(|s|&s.name),"hide_shortcut_id":self.shortcut.as_ref().map(|s|s.id()),"shortcut_active":self.shortcut.as_ref().is_some_and(|s|s.active()),"shortcut_error":self.shortcut.as_ref().and_then(|s|s.error.as_ref()),"pid":std::process::id()}),
             ),
-            "show" => {
-                let hint = Hint::parse(request)?;
+            "show" | "prompt" => {
+                self.refresh_preferences();
+                let request = self.prepare_request(event_loop, request)?;
+                let mut hint = Hint::parse(request)?;
+                self.dismiss_token = self.read_dismiss();
                 let monitor = event_loop
                     .available_monitors()
                     .find(|m| {
@@ -311,6 +352,12 @@ impl App {
                         .contains(hint.x as f32, hint.y as f32)
                     })
                     .ok_or("Target is outside the connected displays; call screen_displays")?;
+                if hint.panel_width.is_none() {
+                    hint.panel_width = Some(
+                        (self.preferences.panel_width as f64 * monitor.scale_factor()).round()
+                            as u32,
+                    );
+                }
                 let pos = monitor.position();
                 let size = monitor.size();
                 let bounds = Rect {
@@ -468,7 +515,7 @@ impl App {
                 self.render_hint = Some(hint.clone());
                 self.hint = Some(hint);
                 Ok(
-                    json!({"ok":true,"visible":true,"arrow_tip":arrow_tip,"panel":self.frame.as_ref().and_then(|f|f.panel),"presentation":platform::presentation_status(self.frame.is_some()),"tracking":self.tracking_status(),"rendered_target":self.render_hint.as_ref().map(Hint::anchor),"color":color_hex(selected),"color_source":self.color_source,"color_note":self.color_note,"hide_shortcut":self.shortcut.as_ref().map(|s|&s.name),"hide_shortcut_id":self.shortcut.as_ref().map(|s|s.id()),"shortcut_active":self.shortcut.as_ref().is_some_and(|s|s.active()),"shortcut_error":self.shortcut.as_ref().and_then(|s|s.error.as_ref())}),
+                    json!({"ok":true,"visible":true,"arrow_tip":arrow_tip,"panel":self.frame.as_ref().and_then(|f|f.panel),"capture_privacy":self.capture_privacy,"conversation_state":self.conversation_state,"presentation":platform::presentation_status(self.frame.is_some()),"tracking":self.tracking_status(),"rendered_target":self.render_hint.as_ref().map(Hint::anchor),"color":color_hex(selected),"color_source":self.color_source,"color_note":self.color_note,"hide_shortcut":self.shortcut.as_ref().map(|s|&s.name),"hide_shortcut_id":self.shortcut.as_ref().map(|s|s.id()),"shortcut_active":self.shortcut.as_ref().is_some_and(|s|s.active()),"shortcut_error":self.shortcut.as_ref().and_then(|s|s.error.as_ref())}),
                 )
             }
             _ => Err(format!("Unknown command: {command}")),
@@ -513,6 +560,8 @@ impl ApplicationHandler<Event> for App {
                 .set_cursor_hittest(false)
                 .map_err(|e| format!("Click-through unavailable: {e}"))?;
             let presenter = platform::Presenter::new(&window)?;
+            self.capture_privacy =
+                platform::set_capture_exclusion(&window, self.preferences.hide_from_capture);
             self.window = Some(window);
             self.presenter = Some(presenter);
             Ok::<_, String>(())
@@ -521,6 +570,13 @@ impl ApplicationHandler<Event> for App {
             self.failure = Some(error);
             event_loop.exit();
             return;
+        }
+        if self.show_settings {
+            if let Err(error) = self.open_settings(event_loop) {
+                self.failure = Some(error);
+                event_loop.exit();
+                return;
+            }
         }
         if let Some(mut request) = self.initial.take() {
             if request["command"] == "demo" {
@@ -560,22 +616,46 @@ impl ApplicationHandler<Event> for App {
                 let _ = command.reply.send(result);
             }
             Event::Quit => {
+                self.stop_conversation();
                 self.clear();
                 event_loop.exit();
             }
             Event::HideShortcut(id) => {
                 if self.shortcut.as_ref().is_some_and(|s| s.matches(id)) {
+                    self.broadcast_dismiss();
                     self.clear();
+                    self.stop_conversation();
+                    self.refresh_ui();
                     if self.once {
                         event_loop.exit();
                     }
                 }
             }
+            Event::Conversation(epoch, event) => self.conversation_event(event_loop, epoch, event),
         }
     }
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if self.settings_window.as_ref().is_some_and(|w| w.id() == id) {
+            let actions = self.settings_window.as_mut().unwrap().handle_event(&event);
+            match actions {
+                Ok(actions) => {
+                    for action in actions {
+                        if let Err(error) = self.settings_action(event_loop, action) {
+                            self.notice = error;
+                            self.refresh_ui();
+                        }
+                    }
+                }
+                Err(error) => {
+                    self.notice = error;
+                    self.refresh_ui();
+                }
+            }
+            return;
+        }
         match event {
             WindowEvent::CloseRequested => {
+                self.stop_conversation();
                 self.clear();
                 event_loop.exit();
             }
@@ -598,6 +678,15 @@ impl ApplicationHandler<Event> for App {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self
+            .preferences_check
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            self.preferences_check = None;
+            self.check_dismiss();
+            self.refresh_preferences();
+            self.schedule_preferences();
+        }
         if self
             .expiry
             .is_some_and(|deadline| Instant::now() >= deadline)
@@ -709,6 +798,7 @@ impl ApplicationHandler<Event> for App {
             .chain(self.animation.as_ref().and_then(|a| a.next))
             .chain(self.animation.as_ref().and_then(|a| a.next_color))
             .chain(self.tracking.as_ref().and_then(|t| t.next))
+            .chain(self.preferences_check)
             .min();
         event_loop.set_control_flow(
             deadline
@@ -860,6 +950,12 @@ fn attach_parent_console() {
 }
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let mut preferences_path = settings::Settings::default_path()?;
+    if let Some(i) = args.iter().position(|a| a == "--settings-file") {
+        preferences_path =
+            std::path::PathBuf::from(args.get(i + 1).ok_or("--settings-file needs a path")?);
+        args.drain(i..=i + 1);
+    }
     let mut hide_shortcut = shortcut::DEFAULT.to_string();
     if let Some(i) = args.iter().position(|a| a == "--hide-shortcut") {
         hide_shortcut = args
@@ -870,6 +966,7 @@ fn run() -> Result<(), String> {
         args.drain(i..=i + 1);
     }
     if args.first().is_some_and(|a| a == "--help" || a == "-h") {
+        println!("Open without arguments or with --app for native settings.\nGlobal: --settings-file /absolute/path/settings.json overrides the preference file.\nText-only agents can call the screen_prompt MCP tool without coordinates.\nThe app's Conversation tab starts the optional audio helper only on explicit Start.\n");
         println!("ScreenCue — lightweight cross-platform desktop hints\n\n  screencue --mcp                MCP over stdin/stdout\n  screencue --json               JSON commands over stdin/stdout\n  screencue demo                 Demo until the hide shortcut\n  screencue displays             Physical monitor coordinates\n  screencue show --x 500 --y 300 --text \"Click here\"\n\nOptions: --shape ellipse|rectangle|rounded|polygon, --width, --height,\n--points \"x,y;x,y;x,y\", --arrow true|false, --target true|false,\n--arrow-scale 0.75..2.5, --animate true|false, --color auto|#RRGGBB,\n--background-colors \"#FFFFFF,#202124\", --duration-ms 0|500..300000,\n--step 1..99. Global: --hide-shortcut Ctrl+Alt+X (default; Option on Mac).\nCLI show persists by default until hidden; an explicit duration sets expiry.\nMCP/JSON keep one overlay per connection. Linux needs X11 + a compositor.\nAuto color checks a small background patch about once per second while visible.");
         println!("Text panels: --title (up to 100 characters), --text (up to 16000), --panel-x/--panel-y,\n--panel-width 120..4000, --text-page 0..N. Use --arrow false --target false for a panel only.");
         println!("Window movement follows locally by default; --follow-window false fixes desktop coordinates.\nScrolling/rearranged controls need a fresh hint. Offscreen targets keep a labelled edge cue.");
@@ -877,6 +974,20 @@ fn run() -> Result<(), String> {
     }
     if args.first().is_some_and(|a| a == "--version") {
         println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if args.first().is_some_and(|a| a == "--render-settings") {
+        let output = args
+            .get(1)
+            .ok_or("--render-settings needs an output PNG path")?;
+        let settings = settings::Settings::default();
+        let status = settings_ui::UiStatus::default();
+        let pixmap = if args.get(2).is_some_and(|s| s == "conversation") {
+            settings_ui::render_conversation_preview(&settings, &status, 760, 730)?
+        } else {
+            settings_ui::render_preview(&settings, &status, 760, 730)?
+        };
+        pixmap.save_png(output).map_err(|e| e.to_string())?;
         return Ok(());
     }
     if args.first().is_some_and(|a| a == "--render-preview") {
@@ -914,10 +1025,11 @@ fn run() -> Result<(), String> {
     }
     let mcp = args.first().is_some_and(|a| a == "--mcp");
     let raw = args.first().is_some_and(|a| a == "--json");
+    let desktop = args.is_empty() || args.as_slice() == ["--app"];
     if (mcp || raw) && args.len() != 1 {
         return Err("--mcp and --json do not accept extra arguments".into());
     }
-    let initial = if mcp || raw {
+    let initial = if mcp || raw || desktop {
         None
     } else {
         Some(parse_cli(&args)?)
@@ -932,14 +1044,32 @@ fn run() -> Result<(), String> {
     {
         use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
         builder
-            .with_activation_policy(ActivationPolicy::Accessory)
+            .with_activation_policy(if desktop {
+                ActivationPolicy::Regular
+            } else {
+                ActivationPolicy::Accessory
+            })
             .with_activate_ignoring_other_apps(false)
             .with_default_menu(false);
     }
     let event_loop = builder
         .build()
         .map_err(|e| format!("Cannot open the desktop (Linux requires X11): {e}"))?;
-    let mut app = App::new(!mcp && !raw, initial)?;
+    let mut app = App::new(!mcp && !raw && !desktop, initial)?;
+    app.preferences_path = preferences_path;
+    match settings::Settings::load(&app.preferences_path) {
+        Ok(value) => app.preferences = value,
+        Err(error) => {
+            if desktop {
+                app.notice = error;
+            } else {
+                return Err(error);
+            }
+        }
+    }
+    app.dismiss_token = app.read_dismiss();
+    app.show_settings = desktop;
+    app.proxy = Some(event_loop.create_proxy());
     app.shortcut = Some(shortcut::Shortcut::new(hide_shortcut)?);
     let shortcut_proxy = event_loop.create_proxy();
     GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
@@ -964,7 +1094,10 @@ fn run() -> Result<(), String> {
             let _ = proxy.send_event(Event::Quit);
         });
     }
-    event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
+    let result = event_loop.run_app(&mut app);
+    app.stop_conversation();
+    listener::finish_shutdown();
+    result.map_err(|e| e.to_string())?;
     if let Some(error) = app.failure {
         return Err(error);
     }

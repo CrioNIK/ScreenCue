@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=ScreenCue
+Comment=Desktop hints and conversation notes
+Exec=screencue --app
+Icon=screencue
+Terminal=false
+Categories=Utility;Accessibility;
+StartupNotify=false
+
