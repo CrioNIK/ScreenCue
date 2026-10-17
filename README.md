@@ -108,6 +108,10 @@ Automatic color prefers red `#EF232D`, changes it when contrast is poor, and ret
 
 The native executable has no network server, telemetry, or model requests. A client's handling of its own observations is controlled by that client. The fonts, brush texture, and four arrow frames are embedded; the application icon is used by the native settings window and installers. The optional audio helper and controllers make requests only to explicitly configured providers. See [latency measurements](docs/LATENCY.md) for the scope of measured native improvements.
 
+## Contribute
+
+Help with Rust fixes, desktop testing, client guides, accessibility, or Ukrainian documentation. See [Contributing to ScreenCue](CONTRIBUTING.md) for small tasks, source setup, and checks. English is primary; Ukrainian contributions are welcome.
+
 ## Build and test
 
 Install stable [Rust](https://www.rust-lang.org/tools/install). Standard Windows builds need C++ Build Tools; macOS needs Command Line Tools. Linux needs X11 and XKB libraries.
