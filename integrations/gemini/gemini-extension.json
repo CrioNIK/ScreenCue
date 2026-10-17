@@ -1,0 +1,12 @@
+{
+  "name": "screencue",
+  "version": "0.2.0",
+  "description": "Point to desktop controls with persistent, click-through sketch arrows.",
+  "mcpServers": {
+    "screencue": {
+      "command": "${extensionPath}/bin/__SCREENCUE_BINARY__",
+      "args": ["--mcp"]
+    }
+  },
+  "contextFileName": "GEMINI.md"
+}

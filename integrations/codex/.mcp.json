@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "screencue": {
+      "type": "stdio",
+      "command": "${PLUGIN_ROOT}/bin/__SCREENCUE_BINARY__",
+      "args": ["--mcp"]
+    }
+  }
+}

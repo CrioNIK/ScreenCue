@@ -1,122 +1,102 @@
 # ScreenCue
 
-Заметные стрелки и лёгкие контуры **поверх экрана** — чтобы ИИ мог показать, куда нажать, пока вы сами работаете в приложении.
+Bold, hand-drawn arrows and light outlines **over your desktop**. An AI agent can point to the next control while you keep working in the application.
 
-Вы спрашиваете голосом или текстом, агент одним вызовом `screen_hint` ставит указатель, вы нажимаете сами. Подсказка пропускает мышь и не получает фокус: переключаться в чат ради объяснения следующего шага не нужно. Подпись можно убрать или оставить в пару слов.
+Ask by voice or text. The agent calls `screen_hint`, and you click the control yourself. Hints let mouse input pass through and never take keyboard focus. A short label is optional.
 
 <img src="assets/screencue-punk.png" alt="ScreenCue" width="120">
 
-**Rust · Windows / macOS / Linux X11 · локальный MCP · MIT · прототип 0.1.0**
+**Rust · Windows / macOS / Linux X11 · Local MCP · MIT · Preview 0.2.0**
 
-![Реальная отрисовка: живая изогнутая стрелка и отдельная рамка](docs/preview.gif)
+![Actual renderer output: an animated sketch arrow and a separate target outline](docs/preview.gif)
 
-ScreenCue работает с агентами разных поставщиков через локальный MCP-сервер. Нужен клиент, который умеет запускать программы через `stdio` в вашей графической сессии. Совместимость со всеми версиями Codex, Dot, Claude, Gemini и другими клиентами не заявляется.
+## Features
 
-## Что умеет
+- A large, crooked SKETCH arrow made from four hand-drawn animation frames. Its tip stops **12 px before the target**, scaled for display density.
+- Independent arrow and target outline. Use an ellipse, rectangle, rounded rectangle, or polygon; outlines have no fill.
+- Red is the primary color. Automatic contrast can select another color when red blends into the background, then return to red when suitable.
+- Optional short label and step number. Set `text: ""` to omit the label.
+- Persistent hints: clicks and changes of the active application do not dismiss them.
+- Local window tracking without another model call. When the target goes offscreen or its window is minimized or closed, a labeled pointer stays at the display edge.
+- **Ctrl+Alt+X** to hide the entire hint; **Ctrl+Option+X** on macOS. The shortcut is configurable.
+- A local MCP server and newline-delimited JSON interface for agents from different providers.
 
-- Стрелка и контур включаются независимо; контур может быть эллипсом, прямоугольником, скруглённой рамкой или произвольным многоугольником.
-- Стрелка SKETCH перебирает четыре рисованных кадра, а лёгкий контур цели слегка двигается; `animate: false` оставляет оба неподвижными.
-- Крупная красная стрелка с толстой изогнутой линией и штрихованным наконечником заканчивается с зазором перед целью. `arrow_scale` меняет её размер: от 0,75 до 2,5, по умолчанию 1,6.
-- Короткая подпись и номер шага; пустой `text` убирает карточку.
-- Явный цвет `#RRGGBB` или подбор цвета по небольшому участку экрана.
-- Подсказки пропускают мышь; координаты задаются в физических пикселях рабочего стола.
-- Одна подсказка на процесс; остаётся до очистки агентом или горячей клавишей. Клики и смена активного окна её не скрывают.
-- По умолчанию следует за окном приложения без нового вызова агента. Если цель ушла за экран или окно свёрнуто/закрыто, указатель остаётся у края экрана с пояснением.
-- Скрытие всей подсказки: **Ctrl+Alt+X** (на macOS — **Ctrl+Option+X**); сочетание можно изменить.
+ScreenCue draws hints; it does not identify controls, capture screenshots for agents, click, or type. The client must provide its own permitted way to observe the current screen. Scrolling and interface reflow require fresh target coordinates. Resizing a tracked window shows a refresh request; returning it to its original size restores tracking. Some legacy Windows apps report their old DPI after moving between displays; if the OS resizes such a window, ScreenCue also requests a refreshed target.
 
-Приложение не распознаёт кнопки и не выполняет клики. Агент получает начальные координаты своими разрешёнными инструментами, а ScreenCue привязывает цель к исходному окну. При изменении размера окна показывается просьба обновить цель; после возврата исходного размера привязка восстанавливается. Прокрутка и перестройка интерфейса требуют нового наблюдения агента. Старые приложения Windows иногда сообщают прежний DPI после переноса на другой монитор: если система меняет размер такого окна, ScreenCue также просит обновить цель. Для неподвижных координат есть `follow_window: false` (`--follow-window false` в CLI); демонстрация использует этот режим.
+## Download and run
 
-## Запуск
+1. Download the archive for your platform from [Releases](https://github.com/CrioNIK/ScreenCue/releases).
 
-1. Откройте [Releases](https://github.com/CrioNIK/ScreenCue/releases) и скачайте архив своей платформы из предварительного выпуска **v0.1.0**:
-
-   | Платформа | Архив |
+   | Platform | Archive |
    | --- | --- |
    | Windows x64 | `screencue-windows-x64.zip` |
    | macOS Apple Silicon | `screencue-macos-apple-silicon.tar.gz` |
    | macOS Intel | `screencue-macos-intel.tar.gz` |
    | Linux x64 / X11 | `screencue-linux-x64-x11.tar.gz` |
 
-2. Распакуйте его в постоянную папку, например `C:\Tools\ScreenCue` на Windows. На macOS/Linux используйте папку в своём домашнем каталоге и выполните `chmod +x ./screencue`, если файл не отмечен как исполняемый.
-3. Проверьте `demo`, затем один раз [подключите агента](#подключение-агента). Для обычной работы терминал больше не нужен: клиент сам запускает ScreenCue.
+2. Extract it to a permanent location, such as `C:\Tools\ScreenCue` on Windows. On macOS/Linux, use a directory in your home folder and run `chmod +x ./screencue` if needed.
+3. Try the demo, then [connect your agent](#connect-your-agent). The client launches ScreenCue during normal use.
 
-В архиве лежит `screencue` (`screencue.exe` на Windows) и лицензии. Для запуска Rust, Node.js и .NET не нужны.
+The native executable needs no Rust, Node.js, .NET, or embedded browser to run. The archive includes license notices.
 
 ```powershell
-# Windows PowerShell, из папки с программой
+# Windows PowerShell, from the extracted directory
 .\screencue.exe demo
 .\screencue.exe displays
-.\screencue.exe show --x 900 --y 420 --text "Откройте настройки"
+.\screencue.exe show --x 900 --y 420 --text "Open settings"
+
+# An outline without an arrow
+.\screencue.exe show --x 600 --y 400 --shape rounded --width 180 --height 48 --arrow false --text "Settings" --color "#AC4DFF"
+
+# An arrow without an outline
+.\screencue.exe show --x 600 --y 400 --target false --text "Click here"
 ```
 
-На macOS/Linux команды такие же, с `./screencue` вместо `.\screencue.exe`.
+On macOS/Linux, use `./screencue` instead of `.\screencue.exe`.
 
-```powershell
-# Тонкая рамка без стрелки
-.\screencue.exe show --x 600 --y 400 --shape rounded --width 180 --height 48 --arrow false --text "Настройки" --color "#AC4DFF"
+Hints have **no timeout by default** (`duration_ms: 0`). An agent can clear or replace its hint, and you can hide it with the shortcut. A standalone `show` command stays running until the shortcut is pressed or its process ends. Use `--duration-ms 8000` when an explicit timeout is wanted. Closing an MCP/JSON connection stops its process and removes its hint. There is no tray icon.
 
-# Стрелка без контура
-.\screencue.exe show --x 600 --y 400 --target false --text "Нажмите здесь"
-```
+Set `--hide-shortcut "Ctrl+Alt+X"` when launching ScreenCue, including with `--mcp` or `--json`, to choose a shortcut. It is registered only while a hint is visible. A conflict does not prevent the hint from appearing: the command response and status report `shortcut_error` so you can choose another combination.
 
-По умолчанию подсказка **не исчезает по таймеру** (`duration_ms: 0`): агент убирает её через `screen_clear` или заменяет следующей; вы можете скрыть её сочетанием клавиш. Клики и переключение окон её не закрывают. Отдельная CLI-команда `show` остаётся запущенной до горячей клавиши или завершения процесса, например `Ctrl+C`. Только если нужен таймер, укажите `--duration-ms 8000`. Закрытие MCP/JSON-соединения завершает его процесс и убирает принадлежащую ему подсказку. Значка в трее нет.
+Set `--follow-window false` for fixed desktop coordinates; the demo uses this mode. `--animate false` freezes both drawings while allowing window tracking. `--arrow-scale` accepts 0.75–2.5, with a default of 1.6.
 
-Сочетание меняется параметром `--hide-shortcut "Ctrl+Alt+X"` при запуске, в том числе с `--mcp` и `--json`. Оно регистрируется только пока видна подсказка. Если сочетание занято, подсказка всё равно появится, а ответ команды и статус сообщат `shortcut_error`; другой набор клавиш автоматически не выбирается.
+## Connect your agent
 
-## Подключение агента
+ScreenCue includes integration packages and agent guidance for **Codex, Claude, Gemini, and Cursor**. Start with the [integration guide](docs/INTEGRATION.md), then follow the relevant [client guide](docs/clients/). Native plugin, extension, skill, and configuration formats differ between clients. The [verification report](docs/VERIFICATION.md) separates tested behavior from remaining client and desktop checks.
 
-Нужен агент с локальным MCP и собственным разрешённым способом увидеть экран. Для Windows выполните **одну команду своего клиента**, заменив путь на путь к распакованной программе:
+The client must launch a local `stdio` MCP process in your graphical desktop session. A cloud chat or voice interface does not gain desktop access merely because the MCP server is configured. Direct Dot/Alt access depends on that environment exposing local tools; it is not assumed.
 
-```powershell
-# Codex
-codex mcp add screencue -- "C:\Tools\ScreenCue\screencue.exe" --mcp
+The tools are `screen_displays`, `screen_hint`, `screen_clear`, and `screen_status`. Each MCP process owns one hint. For a custom agent without MCP, use `--json` with the same hint model.
 
-# Claude Code
-claude mcp add --scope user --transport stdio screencue -- "C:\Tools\ScreenCue\screencue.exe" --mcp
+The agent guidance prioritizes a short path: **observe the current screen → show the hint immediately → give a brief explanation**. It must not open, activate, or switch windows to locate a control. An observation tool is separate from ScreenCue and must already be available to the client.
 
-# Gemini CLI
-gemini mcp add --scope user --transport stdio screencue "C:\Tools\ScreenCue\screencue.exe" -- --mcp
-```
+## Platforms and limits
 
-На macOS/Linux замените путь на `/absolute/path/screencue`. Откройте новую сессию клиента и проверьте сервер `screencue` через `/mcp`. Команды записывают настройку MCP вашего клиента; их синтаксис сверён с официальными руководствами [Codex](https://developers.openai.com/codex/mcp/), [Claude Code](https://code.claude.com/docs/en/mcp#option-3-add-a-local-stdio-server) и [Gemini CLI](https://geminicli.com/docs/tools/mcp-server/#adding-a-server-gemini-mcp-add). Для других приложений используйте [пример JSON/TOML](docs/INTEGRATION.md#mcp-launch-configuration).
-
-Добавьте агенту инструкцию:
-
-> Когда я спрашиваю, куда нажать, посмотри на актуальный экран разрешённым инструментом, сопоставь координаты с `screen_displays` и сразу вызови `screen_hint`. Показывай один шаг: без подписи (`text: ""`) или с двумя-тремя словами. Не переключай окна и не нажимай за меня. Пока указатель виден, достаточно короткой фразы голосом или в чате. После моего действия убери старую подсказку и покажи следующую при необходимости.
-
-Голос и получение снимка обеспечивает клиент. ScreenCue получает координаты и рисует подсказку; подключение MCP само по себе не даёт агенту доступ к экрану.
-
-Инструменты: `screen_displays`, `screen_hint`, `screen_clear`, `screen_status`. Один MCP-процесс владеет своей подсказкой; закрытие соединения убирает её. Для своего агента без MCP есть режим `--json`.
-
-Примеры всех параметров, координаты и жизненный цикл — в [руководстве по интеграции](docs/INTEGRATION.md).
-
-## Платформы и границы поддержки
-
-| Платформа | Вывод подсказки | Цвет `auto` |
+| Platform | Overlay | Automatic background color |
 | --- | --- | --- |
-| Windows | Win32 / GDI, прозрачное окно поверх рабочего стола | Локальное обновление цвета примерно раз в секунду |
-| macOS 12.3+ | AppKit / CALayer | ScreenCaptureKit на macOS 15.2+ с уже выданным разрешением; иначе палитра агента или резервный цвет |
-| Linux | X11 с композитором | Локальное обновление цвета X11 примерно раз в секунду |
+| Windows | Win32 / GDI layered desktop window | Local updates about once per second |
+| macOS 12.3+ | AppKit / CALayer | ScreenCaptureKit on macOS 15.2+ with existing permission; otherwise a supplied palette or fallback |
+| Linux | X11 with a compositor | Local X11 updates about once per second |
 
-Нативный Wayland не поддерживается. Защищённые экраны, некоторые полноэкранные приложения, удалённые сессии и особенности оконного менеджера могут ограничивать вывод поверх экрана. MCP-клиент должен работать в той же графической сессии; обычный облачный чат сам по себе её не получает.
+Native Wayland is not supported. Protected screens, some full-screen applications, remote sessions, and window-manager behavior can limit overlays. Run the client in the same graphical session as the application being guided.
 
-Репозиторий содержит CI для четырёх сборок на трёх ОС; модульные тесты запускаются на архитектуре соответствующего CI-хоста. Windows-сборка статически включает C runtime. Успешная сборка не подтверждает поведение окон на всех рабочих столах. Проверку реального интерфейса macOS/Linux и каждого ИИ-клиента нужно проводить отдельно.
+CI builds four targets across three operating systems and runs unit tests on the runner architecture. Windows includes the C runtime statically. Windows desktop behavior has been tested with the native test suite; a successful macOS/Linux build does not verify every desktop or AI client. Client guides distinguish protocol/configuration validation from live client testing.
 
-## Размер, нагрузка и данные
+## Performance and privacy
 
-Рендеринг программный: без встроенного браузера, Electron и графического контекста GPU. Скрытое приложение ждёт событий. Стрелка SKETCH меняет кадр 5 раз в секунду, лёгкий контур цели обновляется примерно 12 раз в секунду; `--animate false` включает статичный режим. Автоматический цвет проверяется примерно раз в секунду, пока подсказка видна и платформа позволяет чтение. Конкретные размер файла, расход памяти и загрузка CPU зависят от сборки, настроек и ОС.
+Rendering is CPU-based, without Electron, a browser engine, or a GPU context. A hidden instance waits for events. The arrow changes drawings five times per second and the target outline updates about twelve times per second. Binary size, memory, and CPU use depend on the build, platform, and selected features.
 
-Пока есть привязка, приложение проверяет положение окна с плановым интервалом 16 мс на Windows и 33 мс на macOS/X11; это не гарантия задержки. Обычное перемещение с готовой геометрией сдвигает существующее изображение без повторной отрисовки. Даже статичная привязанная подсказка выполняет эти локальные запросы; `follow_window: false` отключает их.
+A tracked window is checked at a scheduled interval of 16 ms on Windows or 33 ms on macOS/X11. These are polling intervals, not guaranteed response times. A simple move translates the existing bitmap without rendering it again. Even a static tracked hint performs these local checks; `follow_window: false` disables them.
 
-Для `color: "auto"` агент может передать `background_colors` — до 16 цветов из своего свежего снимка. Для обновления агент передаёт новую палитру. Без палитры приложение читает небольшие области не больше **64 × 64 пикселей**, чередуя цель и линию стрелки: примерно одна область в секунду, пока подсказка видна. Два последних участка учитываются вместе, а собственные линии подсказки исключаются из анализа. На macOS для локального чтения нужны версия 15.2+ и уже выданное разрешение на запись экрана; ScreenCue не открывает запрос разрешения самостоятельно. При недоступности используется резервный цвет с объяснением.
+For `color: "auto"`, the agent can supply up to 16 `background_colors` from its current observation. Without a supplied palette, ScreenCue samples small regions of at most **64 × 64 pixels**, alternating between the target and arrow shaft at about one patch per second while visible. It combines the two most recent patches and excludes its own ink from analysis. Pixels are never saved or transmitted. On macOS, local sampling requires macOS 15.2+ and screen-recording permission already granted; ScreenCue does not open a permission prompt itself.
 
-Автоматический цвет предпочитает красный `#EF232D`, меняет его, когда он сливается с фоном, и возвращает красный при достаточном контрасте. Пиксели не сохраняются и не передаются. Ответ сообщает `color_source` и причину резервного цвета, если она есть. Явный `#RRGGBB` отключает чтение пикселей и сохраняет выбранный цвет.
+Automatic color prefers red `#EF232D`, changes it when contrast is poor, and returns to red when suitable. The response reports `color_source` and any fallback reason. An explicit `#RRGGBB` disables sampling and keeps that color. A single color cannot guarantee contrast against every moving background pixel.
 
-ScreenCue не содержит сетевого сервера, телеметрии или запросов к моделям. Обработка снимков самим ИИ-клиентом определяется этим клиентом. Шрифт и четыре кадра стрелки встроены в программу; изображение знака в README остаётся только оформлением документации.
+The native executable has no network server, telemetry, or model requests. A client's handling of its own observations is controlled by that client. The font and four arrow frames are embedded; the README logo is documentation-only artwork.
 
-## Сборка и проверки
+## Build and test
 
-Установите стабильный [Rust](https://www.rust-lang.org/tools/install). Для стандартной сборки Windows нужны C++ Build Tools; для macOS — Command Line Tools. Linux требует библиотеки X11 и XKB.
+Install stable [Rust](https://www.rust-lang.org/tools/install). Standard Windows builds need C++ Build Tools; macOS needs Command Line Tools. Linux needs X11 and XKB libraries.
 
 ```sh
 cargo build --release --locked
@@ -124,20 +104,20 @@ cargo fmt --check
 cargo test --locked
 ```
 
-Готовый файл появится в `target/release/`. Команды CI и пакеты Linux перечислены в [.github/workflows/ci.yml](.github/workflows/ci.yml).
+The executable is written to `target/release/`. See [.github/workflows/ci.yml](.github/workflows/ci.yml) for platform build dependencies and CI checks.
 
-На Windows можно проверить видимость, прозрачность для мыши и расход CPU в своей графической сессии:
+On Windows, verify visibility, click-through behavior, window tracking, shortcut conflicts, and CPU usage in your graphical session:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\windows-native.ps1
 ```
 
-Тест показывает собственные подсказки, двигает и сворачивает своё небольшое окно, проверяет привязку и конфликт сочетания клавиш между своими процессами, затем закрывает их. Он не сохраняет снимки и не нажимает на другие приложения; этап автоматического цвета читает временные пиксели через ScreenCue. Транспорт MCP дополнительно проверяется в графической сессии:
+The test creates, moves, and minimizes its own small window, then closes its processes. It does not save screenshots or send input to other applications. The automatic-color test reads transient pixels through ScreenCue. To test the MCP transport and a live overlay:
 
 ```powershell
 node .\tests\mcp-smoke.cjs .\target\release\screencue.exe --live
 ```
 
-Без `--live` проверяется только протокол. Node.js нужен только для этого теста.
+Omit `--live` to check only the protocol. Node.js is needed for the test, not the native executable.
 
-Код: [MIT](LICENSE). Встроенный IBM Plex Mono: [SIL Open Font License 1.1](assets/OFL.txt).
+Code: [MIT](LICENSE). Embedded IBM Plex Mono: [SIL Open Font License 1.1](assets/OFL.txt). Dependency notices: [THIRD-PARTY-LICENSES.txt](docs/THIRD-PARTY-LICENSES.txt).

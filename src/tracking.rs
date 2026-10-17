@@ -157,10 +157,10 @@ mod tests {
         };
         for (x, y) in [(-3000, -1000), (-100, 300), (9000, 9000)] {
             let hint = Hint::parse(json!({"x":x,"y":y})).unwrap();
-            let marker = edge_hint(&hint, monitor, 1., "Цель за экраном");
+            let marker = edge_hint(&hint, monitor, 1., "Target offscreen");
             assert!(fits(&marker, monitor));
             assert!(!marker.target);
-            assert_eq!(marker.text, "Цель за экраном");
+            assert_eq!(marker.text, "Target offscreen");
         }
     }
 }

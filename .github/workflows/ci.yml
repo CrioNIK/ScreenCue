@@ -54,6 +54,11 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt
           rustup target add --toolchain stable "${{ matrix.target }}"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Integration installer and package tests
+        run: python -m unittest discover -s tests -p 'test_integrations.py' -v
       - name: Check formatting
         run: cargo +stable fmt --check
       - name: Unit tests
@@ -68,11 +73,22 @@ jobs:
           cp docs/QUICKSTART.md package/README.md
           cp assets/OFL.txt package/licenses/IBM-Plex-Mono-OFL.txt
           cp docs/THIRD-PARTY-LICENSES.txt package/licenses/
-          tar -czf "screencue-${{ matrix.artifact }}.tar.gz" -C package .
+          if [ "${{ runner.os }}" = 'Windows' ]; then
+            python -c "import shutil; shutil.make_archive('screencue-${{ matrix.artifact }}', 'zip', 'package')"
+          else
+            tar -czf "screencue-${{ matrix.artifact }}.tar.gz" -C package .
+          fi
+      - name: Package native client integrations
+        run: |
+          python scripts/integrate.py bundle --client all --executable "target/${{ matrix.target }}/release/${{ matrix.binary }}" --platform "${{ matrix.artifact }}" --output dist/integrations
+          python scripts/package_integrations.py --input dist/integrations --output "screencue-integrations-${{ matrix.artifact }}.zip"
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
           name: screencue-${{ matrix.artifact }}
-          path: screencue-${{ matrix.artifact }}.tar.gz
+          path: |
+            screencue-${{ matrix.artifact }}.tar.gz
+            screencue-${{ matrix.artifact }}.zip
+            screencue-integrations-${{ matrix.artifact }}.zip
           if-no-files-found: error
           retention-days: 14

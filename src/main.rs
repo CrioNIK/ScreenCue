@@ -160,13 +160,13 @@ impl App {
             .copied()
             .find(|(bounds, _)| tracking::fits(&actual, *bounds));
         let (state, note) = if current.destroyed {
-            ("closed", Some("Окно закрыто"))
+            ("closed", Some("Window closed"))
         } else if !current.visible {
-            ("minimized", Some("Окно свёрнуто или скрыто"))
+            ("minimized", Some("Window minimized or hidden"))
         } else if tracking::resized(tracker.origin, current) {
-            ("needs_refresh", Some("Размер окна изменён · обновите цель"))
+            ("needs_refresh", Some("Window resized · refresh target"))
         } else if fitting.is_none() {
-            ("offscreen", Some("Цель за экраном"))
+            ("offscreen", Some("Target offscreen"))
         } else {
             ("window", None)
         };
@@ -533,7 +533,7 @@ impl ApplicationHandler<Event> for App {
                         .as_ref()
                         .map(|s| s.name.as_str())
                         .unwrap_or(shortcut::DEFAULT);
-                    request = json!({"command":"show","x":p.x+s.width as i32/2,"y":p.y+s.height as i32/2,"text":format!("ScreenCue · {shortcut} — скрыть"),"duration_ms":0,"follow_window":false});
+                    request = json!({"command":"show","x":p.x+s.width as i32/2,"y":p.y+s.height as i32/2,"text":format!("ScreenCue · {shortcut} — hide"),"duration_ms":0,"follow_window":false});
                 }
             }
             let result = self.dispatch(event_loop, request);
@@ -878,7 +878,7 @@ fn run() -> Result<(), String> {
     if args.first().is_some_and(|a| a == "--render-preview") {
         let output = args.get(1).ok_or("--render-preview needs a path")?;
         let hint = Hint::parse(
-            json!({"x":240,"y":80,"text":"Откройте настройки","shape":"rounded","width":90,"height":30}),
+            json!({"x":240,"y":80,"text":"Open settings","shape":"rounded","width":90,"height":30}),
         )?;
         let phase = args
             .get(2)

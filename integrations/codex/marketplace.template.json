@@ -1,0 +1,12 @@
+{
+  "name": "screencue-local",
+  "interface": { "displayName": "ScreenCue Local" },
+  "plugins": [
+    {
+      "name": "screencue",
+      "source": { "source": "local", "path": "./codex" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -14,8 +14,10 @@ const INSTRUCTIONS: &str = "ScreenCue draws persistent click-through hints over 
 It does not provide screenshots, identify controls, click, type, or control other apps. \
 Auto color may sample a small local pixel region on show and about once per second while visible where the platform permits it; \
 pixels are transient and are never saved or transmitted. Before placing a hint, obtain a fresh \
-screen observation using your own permitted screen tools. Call screen_displays to inspect \
-physical desktop bounds. Coordinates use physical desktop pixels, not browser CSS pixels. \
+screen observation using your own permitted screen tools. Call screen_displays when physical \
+desktop bounds are unknown; reuse known bounds while the display configuration is unchanged. \
+For a request to hide the hint, call screen_clear immediately without a screenshot or display lookup. \
+Coordinates use physical desktop pixels, not browser CSS pixels. \
 Map screenshot coordinates using that screenshot's captured desktop origin and physical \
 dimensions; do not guess a scaling factor. Negative desktop coordinates are valid. \
 Arrow and target outline are independent; target shapes include ellipse, rectangle, rounded \
@@ -410,13 +412,13 @@ mod tests {
         )
         .is_none());
         let response = handle_message(
-            json!({"jsonrpc":"2.0","id":"запрос-世界","method":"ping"}),
+            json!({"jsonrpc":"2.0","id":"request-世界","method":"ping"}),
             &mut initialized,
             &no_dispatch,
             REPLY_TIMEOUT,
         )
         .unwrap();
-        assert_eq!(response["id"], "запрос-世界");
+        assert_eq!(response["id"], "request-世界");
     }
 
     #[test]

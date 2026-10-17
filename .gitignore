@@ -6,3 +6,7 @@
 .DS_Store
 /package/
 *.tar.gz
+__pycache__/
+*.pyc
+*.screencue-backup-*
+*.mcpb

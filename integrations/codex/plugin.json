@@ -1,0 +1,26 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "screencue",
+  "version": "0.2.0",
+  "description": "Point to desktop controls with persistent, click-through sketch arrows.",
+  "author": { "name": "CrioNIK", "url": "https://github.com/CrioNIK" },
+  "homepage": "https://github.com/CrioNIK/ScreenCue",
+  "repository": "https://github.com/CrioNIK/ScreenCue",
+  "license": "MIT",
+  "keywords": ["desktop", "overlay", "accessibility", "mcp"],
+  "extensions": {
+    "com.openai": {
+      "requires_local_executor": true,
+      "interface": {
+        "displayName": "ScreenCue",
+        "shortDescription": "Point to desktop controls without switching windows",
+        "longDescription": "Draw animated sketch arrows and independent target outlines over the desktop. ScreenCue follows window movement locally and passes clicks through. Screen observation must come from the client's permitted tools.",
+        "developerName": "CrioNIK",
+        "category": "Productivity",
+        "websiteURL": "https://github.com/CrioNIK/ScreenCue",
+        "defaultPrompt": ["Show me where to click on my current screen."],
+        "brandColor": "#FF2034"
+      }
+    }
+  }
+}

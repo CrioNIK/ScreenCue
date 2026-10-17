@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "screencue": {
+      "command": "__SCREENCUE_EXECUTABLE__",
+      "args": ["--mcp"]
+    }
+  }
+}

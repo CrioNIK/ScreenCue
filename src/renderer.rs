@@ -932,9 +932,9 @@ mod tests {
     }
 
     #[test]
-    fn card_stays_inside_monitor_and_handles_cyrillic_wrapping() {
+    fn card_stays_inside_monitor_and_handles_unicode_wrapping() {
         let renderer = Renderer::new().unwrap();
-        let hint = Hint::parse(json!({"x":1900,"y":1050,"text":"Нажмите настройки приложения, затем выберите нужную вкладку."})).unwrap();
+        let hint = Hint::parse(json!({"x":1900,"y":1050,"text":"Open the application settings — café, naïve, αβγ — then select a tab."})).unwrap();
         let frame = renderer
             .render(&hint, monitor(), 1.5, [0, 210, 255])
             .unwrap();
@@ -990,8 +990,7 @@ mod tests {
     #[test]
     fn animation_reuses_card_pixels_and_font_rasterization() {
         let renderer = Renderer::new().unwrap();
-        let hint =
-            Hint::parse(json!({"x":500,"y":400,"text":"Нажмите настройки","step":2})).unwrap();
+        let hint = Hint::parse(json!({"x":500,"y":400,"text":"Open settings","step":2})).unwrap();
         let first = renderer
             .render_at(&hint, monitor(), 1.0, [10, 210, 255], 0.0)
             .unwrap();

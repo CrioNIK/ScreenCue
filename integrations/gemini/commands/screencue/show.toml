@@ -1,0 +1,5 @@
+description = "Point to a visible control on the current desktop"
+prompt = """
+Use the screencue skill to point to this target: {{args}}
+Observe the current screen passively with permitted tools, map physical desktop coordinates, and call screen_hint immediately after identifying the target. Keep the current window in front and let the user click. If passive observation is unavailable, say so; do not open or switch applications to compensate. Keep the explanation brief.
+"""

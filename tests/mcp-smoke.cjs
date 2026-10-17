@@ -152,7 +152,7 @@ async function main() {
       const reply = await client.raw(JSON.stringify(value));
       assert.equal(reply.error.code, -32600, 'expected invalid-request error: ' + JSON.stringify(value));
     }
-    assert.deepEqual((await client.request('ping', undefined, 'запрос-世界')).result, {});
+    assert.deepEqual((await client.request('ping', undefined, 'request-世界')).result, {});
 
     if (liveOverlay) {
       const { data: geometry } = await client.tool('screen_displays');
@@ -161,7 +161,7 @@ async function main() {
       const monitor = geometry.displays.find(display => display.primary) || geometry.displays[0];
       const x = monitor.x + Math.floor(monitor.width / 2);
       const y = monitor.y + Math.floor(monitor.height / 2);
-      const text = 'Нажмите «Настройки» — 世界 😀\nСледующий шаг';
+      const text = 'Open «Settings» — 世界 😀\nNext step';
       const shown = await client.tool('screen_hint', { x, y, text });
       assert.equal(shown.result.isError, false);
       assert.equal(shown.data.visible, true);

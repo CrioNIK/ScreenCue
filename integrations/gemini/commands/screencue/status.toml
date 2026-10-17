@@ -1,0 +1,4 @@
+description = "Check ScreenCue visibility and tracking status"
+prompt = """
+Call this session's ScreenCue screen_status tool once and briefly report visibility, tracking state, and any shortcut or platform error. Do not show a new hint or switch windows.
+"""

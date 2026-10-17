@@ -1,0 +1,5 @@
+# Merge this table into config.toml after replacing the executable token.
+# Use an absolute path. In TOML basic strings, escape Windows backslashes.
+[mcp_servers.screencue]
+command = "__SCREENCUE_EXECUTABLE__"
+args = ["--mcp"]

@@ -6,6 +6,45 @@ The intended interaction is short: the user asks where to click, the agent calls
 
 ## Install and connect
 
+ScreenCue includes these native integration formats. Each package launches the same local binary directly; there is no model proxy or background relay.
+
+| Client | Package | Agent guidance |
+| --- | --- | --- |
+| [Codex](clients/codex.md) | Portable plugin, Codex compatibility manifest, local marketplace, standalone MCP | Discoverable skill |
+| [Claude Code](clients/claude.md) | Native plugin or standalone MCP | Namespaced plugin skill or standalone skill |
+| [Claude Desktop](clients/claude.md#claude-desktop-native-extension) | Native `.mcpb` extension or desktop MCP configuration | Separate uploadable skill ZIP |
+| [Gemini CLI](clients/gemini.md) | Native extension or standalone MCP | Skill, extension context, show/hide/status commands |
+| [Cursor](clients/cursor.md) | Native local plugin or standalone MCP | Skill and project/plugin rule |
+
+Gemini web/mobile and cloud-only chats cannot launch a local executable by themselves. Direct Dot voice access remains unverified. See the [validation record](VERIFICATION.md) for the distinction between package checks, actual client connections, and authenticated visual interaction.
+
+### One installer for existing clients
+
+From this repository, use Python 3.11+ to merge the configuration and install the client-specific skills. Python is needed only for this optional installer, not to run ScreenCue or a packaged plugin.
+
+```powershell
+python scripts/integrate.py configure --client all --scope user --executable "C:\Tools\ScreenCue\screencue.exe"
+python scripts/integrate.py doctor --client all --scope user
+```
+
+On macOS/Linux, supply an absolute path to `screencue`. Use `--client codex`, `claude-code`, `claude-desktop`, `gemini`, or `cursor` to select one client. `--scope project --root /absolute/project` installs into a project; Claude Desktop supports only user configuration on Windows/macOS. `--dry-run` previews destinations without writing. Existing unrelated settings are preserved; changed files receive adjacent `.screencue-backup-*` copies. Malformed configuration is reported before writing any planned files. Normal client trust prompts still apply; restart or reconnect after setup.
+
+`doctor` launches the configured MCP executable, checks initialization, all four tools, hidden status, and clean shutdown. It does not authenticate to an AI provider or certify that the client's model chooses a tool. Claude Desktop's skill must be uploaded separately through its supported UI.
+
+### Portable packages
+
+The release includes `screencue-integrations-PLATFORM.zip`. Extract it to a permanent folder, then follow the client guide using its `codex`, `claude-code`, `gemini`, or `cursor` directory. Claude Desktop uses the included `.mcpb` and separate skill ZIP. Packages contain the native binary and license notices. Choose either a plugin/extension or standalone MCP configuration per client to avoid duplicate processes and tools.
+
+To build these packages from a matching platform binary:
+
+```sh
+python scripts/integrate.py bundle --client all --executable /absolute/path/screencue --output ./dist/integrations
+```
+
+The platform defaults to the current machine. For cross-packaging, specify `--platform windows-x64`, `macos-apple-silicon`, `macos-intel`, or `linux-x64-x11` and supply that platform's binary. The source manifests contain placeholders and are not directly installable until bundled.
+
+### Manual MCP-only registration
+
 Download the matching binary archive from [ScreenCue Releases](https://github.com/CrioNIK/ScreenCue/releases), extract it to a permanent location, and run `screencue demo` there (`.\screencue.exe demo` in Windows PowerShell). Keep the included licenses. macOS/Linux may need `chmod +x ./screencue`.
 
 The following commands register a user-level local server. They write client configuration; run the command for the client you use. Replace the executable path with your installation path. On macOS/Linux, substitute `/absolute/path/screencue`.
@@ -47,7 +86,7 @@ gemini mcp list
 
 This writes the user MCP entry to `~/.gemini/settings.json`. Check `/mcp` in a new session. The final `-- --mcp` passes ScreenCue's flag to the subprocess. Local CLI help and the [official Gemini CLI MCP guide](https://geminicli.com/docs/tools/mcp-server/#adding-a-server-gemini-mcp-add) describe this syntax. This configures Gemini CLI, not the Gemini website.
 
-No client configuration is included in the repository or applied by ScreenCue itself. These are documented setup commands, not claims that every client/version has been tested end to end.
+The repository contains configuration templates, never personal client settings or credentials. The renderer itself does not modify client configuration. Use either the installer above, a native package, or these manual commands.
 
 ## MCP launch configuration
 
@@ -150,7 +189,7 @@ Samples are transient and never saved or transmitted. A successful response incl
 
 ## Coordinates and observation
 
-Call `screen_displays` before mapping a screenshot. Coordinates refer to the physical virtual desktop and can be negative for monitors to the left of or above the primary monitor. They are not browser CSS coordinates or macOS logical points.
+Call `screen_displays` before mapping a screenshot; reuse those bounds while the display configuration is unchanged. Hiding an existing cue needs only `screen_clear`, with no new screenshot or display query. Coordinates refer to the physical virtual desktop and can be negative for monitors to the left of or above the primary monitor. They are not browser CSS coordinates or macOS logical points.
 
 For a screenshot of a known physical desktop rectangle, map an image point `(u,v)` as:
 

@@ -1,0 +1,6 @@
+interface:
+  display_name: "ScreenCue"
+  short_description: "Point to controls on the current desktop"
+  default_prompt: "Use $screencue to show me where to click on my current screen."
+policy:
+  allow_implicit_invocation: true

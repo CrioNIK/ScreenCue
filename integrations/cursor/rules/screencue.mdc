@@ -1,0 +1,6 @@
+---
+description: Keep ScreenCue desktop pointing fast and passive when the user asks where a visible control is.
+alwaysApply: false
+---
+
+Use the ScreenCue skill and the MCP tools connected to this agent for on-screen pointing. Observe the current screen passively, call `screen_hint` as soon as the target is known, then explain briefly. Do not switch windows, open File Explorer, click, or delegate to a background or cloud agent merely to point. ScreenCue supplies no screenshot or UI identification tool. A browser screenshot alone is insufficient for desktop coordinates without the viewport's physical screen origin and scale. If passive observation is unavailable, say so. Clear a cue immediately with `screen_clear` when requested; do not clear automatically at turn end.

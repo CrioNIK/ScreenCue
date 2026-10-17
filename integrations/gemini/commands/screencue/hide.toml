@@ -1,0 +1,4 @@
+description = "Remove this session's ScreenCue hint"
+prompt = """
+Call this session's ScreenCue screen_clear tool now. No screenshot, display lookup, shell command, or other chat is needed. Briefly confirm the result.
+"""
