@@ -41,8 +41,11 @@ def package(platform: str, overlay: Path, helper: Path, output: Path) -> dict:
         if not suffix:
             destination.chmod(0o755)
     copy(ROOT / "LICENSE", resources / "LICENSE")
-    copy(ROOT / "docs/INSTALL.md", resources / "README.md")
-    copy(ROOT / "docs/CAPTURE-PRIVACY.md", resources / "docs/CAPTURE-PRIVACY.md")
+    installation = (ROOT / "docs/INSTALL.md").read_text(encoding="utf-8")
+    (resources / "README.md").write_text(
+        installation.replace("](CAPTURE-PRIVACY.md)", "](docs/CAPTURE-PRIVACY.md)"), encoding="utf-8")
+    for name in ["CAPTURE-PRIVACY.md", "DUAL-SYSTEM-PLAN.md"]:
+        copy(ROOT / "docs" / name, resources / "docs" / name)
     copy(ROOT / "assets/OFL.txt", resources / "licenses/IBM-Plex-OFL.txt")
     copy(ROOT / "docs/THIRD-PARTY-LICENSES.txt", resources / "licenses/THIRD-PARTY-LICENSES.txt")
     # Explicit public inputs only: never sweep local provider configuration or
@@ -52,7 +55,7 @@ def package(platform: str, overlay: Path, helper: Path, output: Path) -> dict:
     # Scripts belong to Resources in an Apple bundle. Contents/MacOS is reserved
     # for signed native executables; placing Python files there causes strict
     # code-signature verification to treat them as unsigned nested code.
-    for name in ["screencue_controller.py", "conversation_orchestrator.py", "CONVERSATION.md", "conversation.example.json"]:
+    for name in ["screencue_controller.py", "conversation_orchestrator.py", "README.md", "CONVERSATION.md", "conversation.example.json"]:
         copy(ROOT / "controller" / name, resources / "controller" / name)
     helper_notices = ROOT / "conversation/THIRD-PARTY-LICENSES.txt"
     copy(helper_notices, resources / "licenses/CONVERSATION-THIRD-PARTY-LICENSES.txt")

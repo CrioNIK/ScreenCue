@@ -311,7 +311,47 @@ pub fn suggest(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::TcpListener;
+    use std::net::{TcpListener, TcpStream};
+
+    fn read_request(socket: &mut TcpStream) -> (Vec<u8>, usize) {
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut request = Vec::new();
+        let header_end = loop {
+            let mut buffer = [0u8; 4096];
+            let count = socket.read(&mut buffer).unwrap();
+            assert_ne!(count, 0, "Fixture request ended before its headers");
+            request.extend_from_slice(&buffer[..count]);
+            assert!(
+                request.len() <= MAX_RESPONSE,
+                "Fixture request is too large"
+            );
+            if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                break end + 4;
+            }
+        };
+        let length: usize = String::from_utf8_lossy(&request[..header_end])
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .expect("Fixture request needs Content-Length")
+            .1
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(length <= MAX_RESPONSE - header_end);
+        // Closing with unread request bytes can reset the connection on Windows
+        // before the client receives our response. Consume the complete body.
+        while request.len() < header_end + length {
+            let mut buffer = [0u8; 4096];
+            let remaining = (header_end + length - request.len()).min(buffer.len());
+            let count = socket.read(&mut buffer[..remaining]).unwrap();
+            assert_ne!(count, 0, "Fixture request ended before its body");
+            request.extend_from_slice(&buffer[..count]);
+        }
+        (request, header_end)
+    }
 
     #[test]
     fn transcript_is_data_and_context_does_not_become_system_instructions() {
@@ -338,8 +378,8 @@ mod tests {
         let endpoint = format!("http://{}/chat", listener.local_addr().unwrap());
         let serve = thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
-            let mut bytes = [0u8; 4096];
-            let _ = socket.read(&mut bytes);
+            let (request, header_end) = read_request(&mut socket);
+            assert_eq!(&request[header_end..], b"{}");
             socket.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/leak\r\nContent-Length: 12\r\nConnection: close\r\n\r\nprivate-data").unwrap();
         });
         let provider = Provider::OpenaiCompatible {
@@ -374,33 +414,9 @@ mod tests {
         let endpoint = format!("http://{}/transcribe", listener.local_addr().unwrap());
         let serve = thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
-            socket
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            let mut request = Vec::new();
-            let header_end = loop {
-                let mut buffer = [0u8; 4096];
-                let count = socket.read(&mut buffer).unwrap();
-                assert_ne!(count, 0);
-                request.extend_from_slice(&buffer[..count]);
-                if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
-                    break end + 4;
-                }
-            };
+            let (request, header_end) = read_request(&mut socket);
             let headers = String::from_utf8_lossy(&request[..header_end]);
             assert!(headers.contains("multipart/form-data"));
-            let length: usize = headers
-                .lines()
-                .find_map(|line| line.strip_prefix("Content-Length: "))
-                .unwrap()
-                .parse()
-                .unwrap();
-            while request.len() < header_end + length {
-                let mut buffer = [0u8; 4096];
-                let count = socket.read(&mut buffer).unwrap();
-                assert_ne!(count, 0);
-                request.extend_from_slice(&buffer[..count]);
-            }
             let body = &request[header_end..];
             assert!(body.windows(4).any(|bytes| bytes == b"RIFF"));
             assert!(String::from_utf8_lossy(body).contains("diarized_json"));

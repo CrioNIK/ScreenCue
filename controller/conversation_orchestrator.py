@@ -469,16 +469,25 @@ class Orchestrator:
             raise ControllerError("Role mappings must have at most 64 entries")
         return {text(k, "role mapping ID", 150): text(v, "speaker role", 100) for k, v in value.items()}
 
-    def _payload(self, operation):
+    def _payload(self, operation, prepared_candidates=None):
         payload = {"version": 1, "operation": operation, "assisted_role": self.assisted_role,
             "language": self.language, "objective": self.objective, "facts": self.facts,
             "turns": [turn.public() for turn in self.history.values()],
             "max_output_chars": self.policy.max_output_chars,
             "max_candidates": self.policy.max_candidates}
-        while len(json.dumps(payload, ensure_ascii=False)) > self.policy.max_prompt_chars and payload["turns"]:
+        if prepared_candidates is not None:
+            payload["prepared_candidates"] = list(prepared_candidates)
+        def over_budget():
+            return len(json.dumps(payload, ensure_ascii=False)) > self.policy.max_prompt_chars
+        # Never silently discard the current question to fit an otherwise valid
+        # configuration. Older context and optional prepared cues can be removed.
+        while over_budget() and len(payload["turns"]) > 1:
             payload["turns"].pop(0)
-        if len(json.dumps(payload, ensure_ascii=False)) > self.policy.max_prompt_chars:
-            raise ControllerError("Facts and objective exceed the configured prompt budget")
+        if prepared_candidates is not None:
+            while over_budget() and len(payload["prepared_candidates"]) > 3:
+                payload["prepared_candidates"].pop()
+        if over_budget():
+            raise ControllerError("Current turn, facts and required actions exceed the configured prompt budget")
         return payload
 
     def _work(self, lane, payload, metadata=None):
@@ -486,6 +495,18 @@ class Orchestrator:
         origin = next(reversed(self.history.values())).received_at if self.history else now
         timeout = getattr(self.policy, f"{lane}_timeout_ms") / 1000
         return Work(self.generation, self.epoch, origin, now + timeout, payload, {**(metadata or {}), "submitted_at": now})
+
+    def _submit(self, lane, operation, prepared_candidates=None, cancel_active=True):
+        try:
+            payload = self._payload(operation, prepared_candidates)
+        except ControllerError:
+            self.emit({"event": "error", "stage": lane,
+                "message": f"Current context exceeds the {lane} prompt budget"})
+            return False
+        metadata = ({"choices": payload["prepared_candidates"]}
+            if prepared_candidates is not None else None)
+        self.lanes[lane].submit(self._work(lane, payload, metadata), cancel_active=cancel_active)
+        return True
 
     def _fast(self, work, timeout, cancelled):
         if isinstance(self.fast, ChatHTTP) and self.fast.streaming:
@@ -549,12 +570,12 @@ class Orchestrator:
             self.emit({"event": "transcript", **turn.public(), "generation": self.generation})
             if next(reversed(self.history.values())).speaker_role != self.assisted_role:
                 if "fast" in self.lanes:
-                    self.lanes["fast"].submit(self._work("fast", self._payload("suggest")))
+                    self._submit("fast", "suggest")
                 self._submit_decider()
             now = time.monotonic()
             if "planner" in self.lanes and now - self.last_plan >= self.policy.planner_interval_ms / 1000:
-                self.last_plan = now
-                self.lanes["planner"].submit(self._work("planner", self._payload("plan")), cancel_active=False)
+                if self._submit("planner", "plan", cancel_active=False):
+                    self.last_plan = now
             return True
 
     def _submit_decider(self):
@@ -570,9 +591,7 @@ class Orchestrator:
         ]
         if time.monotonic() - self.bank_at < self.policy.plan_ttl_ms / 1000:
             choices += self.bank
-        payload = self._payload("choose")
-        payload["prepared_candidates"] = choices
-        self.lanes["decider"].submit(self._work("decider", payload, {"choices": choices}))
+        self._submit("decider", "choose", choices)
 
     def _decide(self, work, timeout, cancelled):
         choices = work.metadata["choices"]

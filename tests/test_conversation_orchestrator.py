@@ -218,6 +218,50 @@ class OrchestratorTests(unittest.TestCase):
         with self.assertRaises(ControllerError):
             session._plan({"candidates": [{"id": NONE, "kind": "question", "text": "Question?", "fact_ids": []}]})
 
+    def test_prompt_budget_rejects_inference_instead_of_dropping_current_turn(self):
+        fast = Provider(lambda p, t, c: answer())
+        session, events = self.session(fast=fast, policy=Policy(max_prompt_chars=2000))
+        self.assertTrue(session.transcript({"text": "q" * 3000, "speaker_role": "investor"}))
+        self.assertFalse(fast.calls)
+        self.assertIsNone(session.lanes["fast"].pending)
+        self.assertEqual([event["stage"] for event in events if event["event"] == "error"], ["fast"])
+
+    def test_decider_budget_includes_bank_and_preserves_current_turn_and_safe_actions(self):
+        chooser = Chooser("cue-11")
+        session, events = self.session(decider=chooser, policy=Policy(max_prompt_chars=2000))
+        session.bank = [{"id": f"cue-{index}", "kind": "question", "text": "a" * 500,
+                         "when": "b" * 300, "fact_ids": []} for index in range(12)]
+        session.bank_at = time.monotonic()
+        session.transcript({"text": "What should we focus on next?", "speaker_role": "investor"})
+        until(lambda: bool(chooser.calls))
+        ticket = chooser.calls[0]
+        payload = json.loads(ticket.goal)
+        self.assertLessEqual(len(ticket.goal), session.policy.max_prompt_chars)
+        self.assertEqual(payload["turns"][-1]["text"], "What should we focus on next?")
+        ids = [candidate["id"] for candidate in payload["prepared_candidates"]]
+        self.assertEqual(ids[:3], ["action:wait", "action:clear", "action:clarify"])
+        self.assertGreater(len(ids), 3)
+        self.assertLess(len(ids), 15)
+        self.assertEqual([candidate.id for candidate in ticket.observation.candidates], ids)
+        until(lambda: session.lanes["decider"].active_cancel is None)
+        self.assertFalse(any(event["event"] == "hint" for event in events))
+
+    def test_decider_budget_failure_does_not_block_fast_or_valid_planner_result(self):
+        fast = Provider(lambda p, t, c: answer())
+        candidate = {"id": "prepared", "kind": "question", "text": "Which milestone matters most?", "fact_ids": []}
+        planner = Provider(lambda p, t, c: {"candidates": [candidate]})
+        chooser = Chooser()
+        session, events = self.session(fast=fast, planner=planner, decider=chooser,
+            policy=Policy(max_prompt_chars=2000))
+        self.assertTrue(session.transcript({"text": "q" * 1400, "speaker_role": "investor"}))
+        until(lambda: bool(fast.calls) and bool(planner.calls) and bool(session.bank))
+        until(lambda: any(event["event"] == "hint" for event in events))
+        until(lambda: len([event for event in events if event["event"] == "error"]) == 2)
+        self.assertFalse(chooser.calls)
+        self.assertEqual(session.bank[0]["id"], "prepared")
+        errors = [event["stage"] for event in events if event["event"] == "error"]
+        self.assertEqual(errors, ["decider", "decider"])
+
     def test_late_decider_does_not_replace_an_already_valid_fast_answer(self):
         gate = self.gate()
         class DelayedChoice:

@@ -22,14 +22,16 @@ class NativePackageTests(unittest.TestCase):
         self.out = self.base / "dist"
         files = {
             "Cargo.toml": '[package]\nname="screencue"\nversion="0.0.4"\n',
-            "LICENSE": "Project license", "docs/INSTALL.md": "Install",
+            "LICENSE": "Project license", "docs/INSTALL.md": "Install: [Capture privacy](CAPTURE-PRIVACY.md)",
             "docs/CAPTURE-PRIVACY.md": "Privacy", "assets/OFL.txt": "Font license",
+            "docs/DUAL-SYSTEM-PLAN.md": "Decision provider design and sources",
             "docs/THIRD-PARTY-LICENSES.txt": "Overlay notices",
             "conversation/THIRD-PARTY-LICENSES.txt": "Helper notices",
             "conversation/README.md": "Helper usage", "conversation/example.json": "{}",
             "conversation/private.json": '{"secret":"must not ship"}',
             "controller/screencue_controller.py": "# Test controller fixture",
             "controller/conversation_orchestrator.py": "# Test orchestrator fixture",
+            "controller/README.md": "Typed Choice provider configuration",
             "controller/CONVERSATION.md": "Orchestrator usage",
             "controller/conversation.example.json": "{}",
             "assets/app-icon-256.png": "Test image fixture", "assets/app-icon.icns": "Test icon fixture",
@@ -56,6 +58,10 @@ class NativePackageTests(unittest.TestCase):
         self.assertTrue((stage / "licenses/CONVERSATION-THIRD-PARTY-LICENSES.txt").is_file())
         self.assertTrue((stage / "conversation/example.json").is_file())
         self.assertTrue((stage / "controller/conversation_orchestrator.py").is_file())
+        self.assertTrue((stage / "controller/README.md").is_file())
+        self.assertTrue((stage / "docs/DUAL-SYSTEM-PLAN.md").is_file())
+        self.assertIn("](docs/CAPTURE-PRIVACY.md)", (stage / "README.md").read_text(encoding="utf-8"))
+        self.assertIn("](CAPTURE-PRIVACY.md)", (self.root / "docs/INSTALL.md").read_text(encoding="utf-8"))
         self.assertFalse((stage / "conversation/private.json").exists())
         self.assertFalse(json.loads((stage / "package.json").read_text())["signed"])
 
@@ -74,6 +80,8 @@ class NativePackageTests(unittest.TestCase):
         with tarfile.open(result["artifact"], "r:gz") as archive:
             for name in ["screencue", "screencue-listen", "install.sh", "uninstall.sh"]:
                 self.assertTrue(archive.getmember("ScreenCue/" + name).mode & 0o111, name)
+            for name in ["controller/README.md", "docs/DUAL-SYSTEM-PLAN.md"]:
+                self.assertTrue(archive.getmember("ScreenCue/" + name).isfile(), name)
 
     def test_macos_bundle_has_audio_permission_purpose_strings_and_sibling_helper(self):
         with mock.patch.object(PACKAGE.subprocess, "run") as run, mock.patch.object(Path, "symlink_to") as symlink:
@@ -87,6 +95,9 @@ class NativePackageTests(unittest.TestCase):
         self.assertIn("NSAudioCaptureUsageDescription", info)
         self.assertTrue((app / "Contents/MacOS/screencue-listen").is_file())
         self.assertTrue((app / "Contents/Resources/controller/conversation_orchestrator.py").is_file())
+        self.assertTrue((app / "Contents/Resources/controller/README.md").is_file())
+        self.assertTrue((app / "Contents/Resources/docs/DUAL-SYSTEM-PLAN.md").is_file())
+        self.assertIn("](docs/CAPTURE-PRIVACY.md)", (app / "Contents/Resources/README.md").read_text(encoding="utf-8"))
         self.assertFalse((app / "Contents/MacOS/controller").exists())
         self.assertEqual({p.name for p in (app / "Contents/MacOS").iterdir()}, {"screencue", "screencue-listen"})
         symlink.assert_called_once_with("/Applications")

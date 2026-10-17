@@ -8,12 +8,13 @@ This release adds the native settings app and application icon, independent conv
 
 - Native Rust renderer/settings suite: 68 tests passed.
 - Native audio-helper Rust suite: 12 tests passed.
+- Python integration, controller, conversation, desktop-process and packaging suites: 84 tests passed with the built native binaries enabled.
 - MCP lifecycle and live hints passed, including `screen_prompt`, text-only geometry, malformed input, replacement preservation, and clean EOF.
 - Native overlay suite passed: click-through styles, no focus change, persistent hints, local window tracking, minimize/offscreen/restore behavior, animation, hide shortcut, and shutdown.
 - Settings-window test passed: native icon, visibility, minimize, restore and close; capture policy exactly `0x11` when enabled and `0x0` when disabled on both settings and overlay windows; no capture or model service started.
 - Five independent desktop-process tests passed: shared settings and dismissal across connections, settings loading before first display, conversation defaults and explicit arrow overrides, and Start/Stop/restart through owned UI controls. A synthetic helper emitted a deliberately late hint and deliberately ignored shutdown; the app suppressed that hint and reaped the helper.
 - Native helper process tests use synthetic transcripts, local fake HTTP responses and explicit command fixtures. They cover provider validation before capture, speaker/role fields, independently progressing transcription and suggestions, stale generations, Stop, EOF and command cancellation.
-- Conversation orchestrator tests use bounded fake providers and a local SSE fixture. They cover independent lanes, partial/final revisions, role routing, stale output, prepared candidates, stream cancellation, and fresh observed screen geometry.
+- The 23 conversation orchestrator tests use bounded fake providers and a local SSE fixture. They cover independent lanes, partial/final revisions, role routing, stale output, prepared candidates, stream cancellation, fresh observed screen geometry, and lane-local prompt budgets that preserve the current turn.
 
 No real microphone or system audio was captured during verification. No account credentials, paid model request, actual Jev service or live meeting application was used. Speaker-diarization accuracy and speech-to-first-useful-cue latency remain unmeasured. Native capture-policy readback is not a test of another application's recording or the receiver's view.
 
