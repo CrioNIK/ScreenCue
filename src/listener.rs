@@ -109,10 +109,18 @@ pub struct Listener {
 }
 impl Listener {
     pub fn start(path: &Path, send: impl Fn(Value) + Send + 'static) -> Result<Self, String> {
+        Self::start_with_env(path, Vec::new(), send)
+    }
+    pub fn start_with_env(
+        path: &Path,
+        environment: Vec<(String, String)>,
+        send: impl Fn(Value) + Send + 'static,
+    ) -> Result<Self, String> {
         if !path.is_file() {
             return Err("Choose an existing conversation configuration first.".into());
         }
         let mut child = launch_command(path)?
+            .envs(environment)
             .arg("--config")
             .arg(path)
             .arg("--start")

@@ -17,6 +17,7 @@ Early releases follow the [`0.0.x` versioning policy](docs/VERSIONING.md); small
 ## Features
 
 - A native desktop settings window, app icon, and installable desktop packages. Open ScreenCue normally to configure appearance, privacy, and conversation assistance.
+- A **Connections** menu with separate audio/speaker, fast-model, big-model and System 1 profiles. Choose an API endpoint or command bridge for each, save separate keys in the OS credential store, or reference existing environment variables. See [connections](docs/CONNECTIONS.md).
 - Independent speaking notes through `screen_prompt`: agents can send text immediately without a screenshot or coordinate lookup.
 - Optional microphone and system-audio transcription, explicit speaker-role mappings, and local or hosted model adapters. Capture starts only after pressing **Start**. See [conversation setup](conversation/README.md) and the [independent fast/decision/planning lanes](controller/CONVERSATION.md).
 - Optional Windows screen-capture exclusion, with native flag verification. macOS/Linux report unsupported; no sharing application is assumed to honor it. See [capture privacy](docs/CAPTURE-PRIVACY.md).

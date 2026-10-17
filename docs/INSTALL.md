@@ -23,6 +23,14 @@ audio. Configure your provider and enable the audio sources you want before
 starting conversation assistance. You can also use visual hints directly from
 an MCP agent without the conversation helper.
 
+Use **Connections → Models & keys** to configure each of the four model roles.
+**Runtime & audio** selects managed connections, audio sources, speaker labels,
+and the optional Python interpreter for independent planning/decision lanes.
+The Conversation tab still accepts an external JSON configuration when managed
+connections are off. See [Connections](CONNECTIONS.md) and
+[API key storage](CREDENTIAL-STORAGE.md). Saving preferences or a key never starts
+audio or contacts a model provider.
+
 ## Windows
 
 The installer targets Windows 10 build 19041 or newer and Windows 11. It uses

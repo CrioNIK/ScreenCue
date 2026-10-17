@@ -24,6 +24,7 @@ pub struct Settings {
     pub animate: bool,
     pub panel_width: u32,
     pub audio_config: String,
+    pub connections: crate::connections::Connections,
 }
 
 impl Default for Settings {
@@ -34,6 +35,7 @@ impl Default for Settings {
             animate: true,
             panel_width: 420,
             audio_config: String::new(),
+            connections: crate::connections::Connections::default(),
         }
     }
 }
@@ -47,6 +49,14 @@ impl Settings {
             || self.audio_config.chars().any(char::is_control)
         {
             return Err("Audio configuration path must be at most 4096 characters without control characters".into());
+        }
+        self.connections.validate()?;
+        if serde_json::to_vec_pretty(self)
+            .map_err(|_| "Cannot serialize settings")?
+            .len()
+            > 32768
+        {
+            return Err("Settings file exceeds 32 KiB".into());
         }
         Ok(())
     }
@@ -149,6 +159,10 @@ mod tests {
         assert_eq!(value.mode, Mode::Conversation);
         assert!(!value.hide_from_capture);
         assert_eq!(value.panel_width, 420);
+        assert_eq!(
+            value.connections,
+            crate::connections::Connections::default()
+        );
         assert!(serde_json::from_str::<Settings>(r#"{"api_key":"secret"}"#).is_err());
     }
 
@@ -185,5 +199,17 @@ mod tests {
         assert!(settings.validate().is_err());
         settings.audio_config = "x".repeat(4097);
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn combined_preferences_cannot_exceed_the_load_limit() {
+        let mut settings = Settings::default();
+        settings.audio_config = "🧭".repeat(4096);
+        settings.connections.fast.command = vec!["argument".repeat(125); 20];
+        settings.connections.validate().unwrap();
+        assert_eq!(
+            settings.validate().unwrap_err(),
+            "Settings file exceeds 32 KiB"
+        );
     }
 }

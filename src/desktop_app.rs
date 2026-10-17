@@ -1,6 +1,7 @@
 //! Native settings and explicit conversation lifecycle.
 use crate::{
-    listener, platform,
+    connections::{AuthMode, Connections, Lane, ProviderKind},
+    credentials, listener, platform,
     settings::{Mode, Settings},
     settings_ui::{Action, SettingsWindow, UiStatus},
     App, Event,
@@ -55,6 +56,9 @@ impl App {
                 .as_ref()
                 .map(|s| s.name.clone())
                 .unwrap_or_else(|| crate::shortcut::DEFAULT.into()),
+            credential_states: self.credential_states,
+            credential_backend: credentials::backend_name().into(),
+            credential_error: self.credential_error.clone(),
         }
     }
     pub(super) fn refresh_ui(&mut self) {
@@ -78,13 +82,19 @@ impl App {
         show_settings_window(window.window());
         window.window().request_redraw();
         self.settings_window = Some(window);
+        self.refresh_credential_status();
         self.refresh_ui();
         Ok(())
     }
     pub(super) fn refresh_preferences(&mut self) {
         match Settings::load(&self.preferences_path) {
             Ok(value) if value != self.preferences => {
+                let connections_changed = value.connections != self.preferences.connections;
                 self.preferences = value;
+                if connections_changed {
+                    self.stop_conversation();
+                    self.refresh_credential_status();
+                }
                 self.apply_privacy();
                 self.refresh_ui();
             }
@@ -108,6 +118,9 @@ impl App {
         }
     }
     pub(super) fn stop_conversation(&mut self) {
+        if let Some(cancelled) = &self.connection_cancel {
+            cancelled.store(true, std::sync::atomic::Ordering::Release);
+        }
         self.listener_epoch = self.listener_epoch.wrapping_add(1);
         self.listener.take();
         self.conversation_state = "Stopped".into();
@@ -116,6 +129,133 @@ impl App {
                 shortcut.unregister();
             }
         }
+    }
+    fn save_connections(&mut self, connections: Connections) -> Result<(), String> {
+        let mut settings = self.preferences.clone();
+        settings.connections = connections;
+        settings.save(&self.preferences_path)?;
+        self.stop_conversation();
+        self.preferences = settings;
+        Ok(())
+    }
+    pub(super) fn refresh_credential_status(&mut self) {
+        self.credential_epoch = self.credential_epoch.wrapping_add(1);
+        self.credential_states = [false; 4];
+        self.credential_error = None;
+        if self.credential_check_busy || self.credential_busy {
+            return;
+        }
+        if self.settings_window.is_none() {
+            return;
+        }
+        let Some(proxy) = self.proxy.clone() else {
+            return;
+        };
+        let epoch = self.credential_epoch;
+        self.credential_check_busy = true;
+        let connections = self.preferences.connections.clone();
+        let path = self.preferences_path.clone();
+        std::thread::spawn(move || {
+            let mut states = [false; 4];
+            let mut error = None;
+            for lane in Lane::ALL {
+                if connections.get(lane).auth == AuthMode::Vault {
+                    match credentials::exists(&connections.credential_account(&path, lane)) {
+                        Ok(present) => states[lane as usize] = present,
+                        Err(message) => {
+                            error = Some(message);
+                            break;
+                        }
+                    }
+                }
+            }
+            let _ = proxy.send_event(Event::CredentialStatus(epoch, states, error));
+        });
+    }
+    pub(super) fn credential_status_event(
+        &mut self,
+        epoch: u64,
+        states: [bool; 4],
+        error: Option<String>,
+    ) {
+        self.credential_check_busy = false;
+        if epoch == self.credential_epoch {
+            self.credential_states = states;
+            self.credential_error = error;
+            self.refresh_ui();
+        } else if !self.credential_busy {
+            // A stale reader must not advance the generation of a pending
+            // write. The write completion schedules the next read instead.
+            self.refresh_credential_status();
+        }
+    }
+    pub(super) fn credential_changed_event(
+        &mut self,
+        epoch: u64,
+        lane: Lane,
+        result: Result<bool, String>,
+    ) {
+        self.credential_busy = false;
+        let current = epoch == self.credential_epoch;
+        match result {
+            Ok(present) => {
+                if current {
+                    self.credential_error = None;
+                    self.credential_states[lane as usize] = present;
+                    self.notice = if present {
+                        "Key saved in the operating system credential store."
+                    } else {
+                        "Saved key removed."
+                    }
+                    .into();
+                } else {
+                    // An external settings change can select a new destination
+                    // during an OS prompt. Never assign the old key to that role.
+                    self.notice = if present {
+                        "Key saved for the previously selected connection."
+                    } else {
+                        "Key removed from the previously selected connection."
+                    }
+                    .into();
+                }
+            }
+            Err(error) => self.notice = error,
+        }
+        // Refresh after the write has finished, including a deferred read or a
+        // changed connection. This cannot invalidate an in-flight write now.
+        self.refresh_credential_status();
+        self.refresh_ui();
+    }
+    pub(super) fn conversation_ready(
+        &mut self,
+        epoch: u64,
+        result: Result<(std::path::PathBuf, Vec<(String, String)>), String>,
+    ) {
+        self.connection_preparing = false;
+        self.connection_cancel = None;
+        self.check_dismiss();
+        if epoch != self.listener_epoch || self.conversation_state != "Starting" {
+            return;
+        }
+        let result = result.and_then(|(path, environment)| {
+            let proxy = self
+                .proxy
+                .clone()
+                .ok_or("Desktop event proxy is unavailable")?;
+            listener::Listener::start_with_env(&path, environment, move |event| {
+                let _ = proxy.send_event(Event::Conversation(epoch, event));
+            })
+        });
+        match result {
+            Ok(listener) => self.listener = Some(listener),
+            Err(error) => {
+                self.stop_conversation();
+                self.conversation_state = "Error".into();
+                self.notice = error;
+            }
+        }
+        self.schedule_preferences();
+        self.refresh_ui();
     }
     pub(super) fn settings_action(
         &mut self,
@@ -157,6 +297,12 @@ impl App {
                 self.clear();
             }
             Action::StartConversation => {
+                if self.connection_preparing {
+                    return Err("The credential store is still completing the previous Start request. Stop cancels launch; wait for the store to return before starting again.".into());
+                }
+                if self.credential_busy {
+                    return Err("Wait for the key operation to finish before starting.".into());
+                }
                 self.stop_conversation();
                 self.dismiss_token = self.read_dismiss();
                 let proxy = self
@@ -164,13 +310,25 @@ impl App {
                     .clone()
                     .ok_or("Desktop event proxy is unavailable")?;
                 let epoch = self.listener_epoch;
-                let process = listener::Listener::start(
-                    Path::new(&self.preferences.audio_config),
-                    move |event| {
-                        let _ = proxy.send_event(Event::Conversation(epoch, event));
-                    },
-                )?;
-                self.listener = Some(process);
+                if self.preferences.connections.enabled {
+                    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    self.connection_cancel = Some(cancelled.clone());
+                    self.connection_preparing = true;
+                    let connections = self.preferences.connections.clone();
+                    let path = self.preferences_path.clone();
+                    std::thread::spawn(move || {
+                        let result = prepare_connections(&connections, &path, &cancelled);
+                        let _ = proxy.send_event(Event::ConversationReady(epoch, result));
+                    });
+                } else {
+                    let process = listener::Listener::start(
+                        Path::new(&self.preferences.audio_config),
+                        move |event| {
+                            let _ = proxy.send_event(Event::Conversation(epoch, event));
+                        },
+                    )?;
+                    self.listener = Some(process);
+                }
                 self.conversation_state = "Starting".into();
                 self.notice.clear();
                 if let Some(shortcut) = &mut self.shortcut {
@@ -196,6 +354,67 @@ impl App {
                 self.notice="Example created. Configure transcription and suggestion providers before Start.".into();
             }
             Action::OpenAudioConfig => open_config(Path::new(&self.preferences.audio_config))?,
+            Action::SaveConnections(connections) => {
+                if self.credential_busy {
+                    return Err(
+                        "Wait for the key operation to finish before saving connections.".into(),
+                    );
+                }
+                self.save_connections(connections)?;
+                self.refresh_credential_status();
+                self.notice = "Connections saved. Changes take effect on the next Start.".into();
+            }
+            Action::StoreConnectionKey {
+                lane,
+                connection,
+                secret,
+            } => {
+                if self.credential_busy {
+                    return Err("A key operation is already running.".into());
+                }
+                let mut connections = self.preferences.connections.clone();
+                *connections.get_mut(lane) = connection;
+                connections.get_mut(lane).auth = AuthMode::Vault;
+                self.save_connections(connections)?;
+                self.credential_epoch = self.credential_epoch.wrapping_add(1);
+                let epoch = self.credential_epoch;
+                let account = self
+                    .preferences
+                    .connections
+                    .credential_account(&self.preferences_path, lane);
+                let proxy = self
+                    .proxy
+                    .clone()
+                    .ok_or("Desktop event proxy is unavailable")?;
+                self.credential_busy = true;
+                self.notice = "Saving key in the operating system credential store…".into();
+                std::thread::spawn(move || {
+                    let result = credentials::set(&account, &secret).map(|_| true);
+                    let _ = proxy.send_event(Event::CredentialChanged(epoch, lane, result));
+                });
+            }
+            Action::DeleteConnectionKey(lane) => {
+                if self.credential_busy {
+                    return Err("A key operation is already running.".into());
+                }
+                self.stop_conversation();
+                self.credential_epoch = self.credential_epoch.wrapping_add(1);
+                let epoch = self.credential_epoch;
+                let account = self
+                    .preferences
+                    .connections
+                    .credential_account(&self.preferences_path, lane);
+                let proxy = self
+                    .proxy
+                    .clone()
+                    .ok_or("Desktop event proxy is unavailable")?;
+                self.credential_busy = true;
+                self.notice = "Removing saved key…".into();
+                std::thread::spawn(move || {
+                    let result = credentials::delete(&account).map(|_| false);
+                    let _ = proxy.send_event(Event::CredentialChanged(epoch, lane, result));
+                });
+            }
             Action::Close => {
                 self.stop_conversation();
                 self.clear();
@@ -355,7 +574,8 @@ impl App {
         Ok(request)
     }
     pub(super) fn schedule_preferences(&mut self) {
-        if self.frame.is_some() || self.listener.is_some() {
+        if self.frame.is_some() || self.listener.is_some() || self.conversation_state == "Starting"
+        {
             if self.preferences_check.is_none() {
                 self.preferences_check = Some(Instant::now() + Duration::from_millis(250));
             }
@@ -401,6 +621,54 @@ impl App {
             self.refresh_ui();
         }
     }
+}
+
+fn prepare_connections(
+    connections: &Connections,
+    path: &Path,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<(std::path::PathBuf, Vec<(String, String)>), String> {
+    let check_cancelled = || {
+        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            Err("Connection start was cancelled".to_string())
+        } else {
+            Ok(())
+        }
+    };
+    check_cancelled()?;
+    let config = connections.write_runtime_config(path)?;
+    let mut environment = Vec::new();
+    for lane in Lane::ALL {
+        check_cancelled()?;
+        if !connections.lane_active(lane) {
+            continue;
+        }
+        let connection = connections.get(lane);
+        if connection.kind == ProviderKind::Disabled {
+            continue;
+        }
+        match connection.auth {
+            AuthMode::None => {}
+            AuthMode::Environment => {
+                if std::env::var(&connection.key_env)
+                    .ok()
+                    .filter(|key| !key.trim().is_empty())
+                    .is_none()
+                {
+                    return Err(format!("The {} environment credential is unavailable. Set it before opening ScreenCue or save a key here.", lane.label()));
+                }
+            }
+            AuthMode::Vault => {
+                let key = credentials::get(&connections.credential_account(path, lane))?
+                    .ok_or_else(|| {
+                        format!("Save an API key for {} before starting.", lane.label())
+                    })?;
+                environment.push((lane.env_name().into(), key));
+            }
+        }
+    }
+    check_cancelled()?;
+    Ok((config, environment))
 }
 
 fn open_config(path: &Path) -> Result<(), String> {
@@ -462,4 +730,81 @@ fn show_settings_window(window: &winit::window::Window) {
     }
     #[cfg(not(windows))]
     window.set_visible(true);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_credential_read_cannot_invalidate_a_pending_write() {
+        let mut app = App::new(false, None).unwrap();
+        app.credential_epoch = 2;
+        app.credential_busy = true;
+        app.credential_check_busy = true;
+        app.notice = "Saving key…".into();
+
+        app.credential_status_event(1, [false; 4], None);
+        assert_eq!(app.credential_epoch, 2);
+        assert!(app.credential_busy);
+        assert!(!app.credential_check_busy);
+        app.credential_changed_event(2, Lane::Fast, Ok(true));
+        assert!(!app.credential_busy);
+        assert_eq!(
+            app.notice,
+            "Key saved in the operating system credential store."
+        );
+        assert!(app.credential_epoch > 2);
+    }
+
+    #[test]
+    fn credential_write_for_an_old_destination_does_not_mark_the_new_one_present() {
+        let mut app = App::new(false, None).unwrap();
+        app.credential_epoch = 2;
+        app.credential_busy = true;
+        app.credential_check_busy = true;
+        app.preferences.connections.fast.endpoint = "https://new.example/api".into();
+        // This is the same refresh used for externally changed preferences.
+        app.refresh_credential_status();
+        let changed_epoch = app.credential_epoch;
+        app.credential_status_event(1, [true; 4], None);
+        assert_eq!(app.credential_epoch, changed_epoch);
+        assert_eq!(app.credential_states, [false; 4]);
+        app.credential_changed_event(2, Lane::Fast, Ok(true));
+        assert!(!app.credential_busy);
+        assert_eq!(app.credential_states, [false; 4]);
+        assert_eq!(
+            app.notice,
+            "Key saved for the previously selected connection."
+        );
+        assert!(app.credential_epoch > changed_epoch);
+    }
+
+    #[test]
+    fn a_stopped_or_superseded_connection_preparation_cannot_launch_a_helper() {
+        let mut app = App::new(false, None).unwrap();
+        app.preferences_path = std::env::temp_dir().join(format!(
+            "screencue-no-launch-{}-settings.json",
+            std::process::id()
+        ));
+        app.conversation_state = "Starting".into();
+        let epoch = app.listener_epoch;
+        app.stop_conversation();
+        app.conversation_ready(
+            epoch,
+            Ok((
+                "this-helper-must-never-launch".into(),
+                vec![("SYNTHETIC_KEY".into(), "fixture-value".into())],
+            )),
+        );
+        assert!(app.listener.is_none());
+        assert_eq!(app.conversation_state, "Stopped");
+        assert!(app.notice.is_empty());
+        app.conversation_ready(
+            app.listener_epoch,
+            Err("This stale error must stay hidden".into()),
+        );
+        assert_eq!(app.conversation_state, "Stopped");
+        assert!(app.notice.is_empty());
+    }
 }

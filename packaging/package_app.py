@@ -42,9 +42,10 @@ def package(platform: str, overlay: Path, helper: Path, output: Path) -> dict:
             destination.chmod(0o755)
     copy(ROOT / "LICENSE", resources / "LICENSE")
     installation = (ROOT / "docs/INSTALL.md").read_text(encoding="utf-8")
-    (resources / "README.md").write_text(
-        installation.replace("](CAPTURE-PRIVACY.md)", "](docs/CAPTURE-PRIVACY.md)"), encoding="utf-8")
-    for name in ["CAPTURE-PRIVACY.md", "DUAL-SYSTEM-PLAN.md"]:
+    for name in ["CAPTURE-PRIVACY.md", "CONNECTIONS.md", "CREDENTIAL-STORAGE.md"]:
+        installation = installation.replace(f"]({name})", f"](docs/{name})")
+    (resources / "README.md").write_text(installation, encoding="utf-8")
+    for name in ["CAPTURE-PRIVACY.md", "DUAL-SYSTEM-PLAN.md", "CONNECTIONS.md", "CREDENTIAL-STORAGE.md", "settings-connections.png", "settings-runtime.png"]:
         copy(ROOT / "docs" / name, resources / "docs" / name)
     copy(ROOT / "assets/OFL.txt", resources / "licenses/IBM-Plex-OFL.txt")
     copy(ROOT / "docs/THIRD-PARTY-LICENSES.txt", resources / "licenses/THIRD-PARTY-LICENSES.txt")

@@ -1,6 +1,8 @@
 #![recursion_limit = "256"]
 #![cfg_attr(all(target_os = "windows", not(test)), windows_subsystem = "windows")]
 mod color;
+mod connections;
+mod credentials;
 mod desktop_app;
 mod listener;
 mod model;
@@ -33,6 +35,12 @@ enum Event {
     Command(protocol::Command),
     HideShortcut(u32),
     Conversation(u64, Value),
+    ConversationReady(
+        u64,
+        Result<(std::path::PathBuf, Vec<(String, String)>), String>,
+    ),
+    CredentialStatus(u64, [bool; 4], Option<String>),
+    CredentialChanged(u64, connections::Lane, Result<bool, String>),
     Quit,
 }
 struct Animation {
@@ -83,6 +91,13 @@ struct App {
     proxy: Option<EventLoopProxy<Event>>,
     preferences_check: Option<Instant>,
     dismiss_token: String,
+    credential_states: [bool; 4],
+    credential_epoch: u64,
+    credential_busy: bool,
+    credential_error: Option<String>,
+    credential_check_busy: bool,
+    connection_preparing: bool,
+    connection_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 impl App {
     fn new(once: bool, initial: Option<Value>) -> Result<Self, String> {
@@ -117,6 +132,13 @@ impl App {
             proxy: None,
             preferences_check: None,
             dismiss_token: String::new(),
+            credential_states: [false; 4],
+            credential_epoch: 0,
+            credential_busy: false,
+            credential_error: None,
+            credential_check_busy: false,
+            connection_preparing: false,
+            connection_cancel: None,
         })
     }
     fn tracking_status(&self) -> Value {
@@ -136,7 +158,7 @@ impl App {
         self.tracking_note = None;
         self.expiry = None;
         self.animation = None;
-        if self.listener.is_none() {
+        if self.listener.is_none() && self.conversation_state != "Starting" {
             if let Some(shortcut) = &mut self.shortcut {
                 shortcut.unregister();
             }
@@ -632,6 +654,13 @@ impl ApplicationHandler<Event> for App {
                 }
             }
             Event::Conversation(epoch, event) => self.conversation_event(event_loop, epoch, event),
+            Event::ConversationReady(epoch, result) => self.conversation_ready(epoch, result),
+            Event::CredentialStatus(epoch, states, error) => {
+                self.credential_status_event(epoch, states, error);
+            }
+            Event::CredentialChanged(epoch, lane, result) => {
+                self.credential_changed_event(epoch, lane, result);
+            }
         }
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -951,6 +980,7 @@ fn attach_parent_console() {
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let mut preferences_path = settings::Settings::default_path()?;
+    let explicit_preferences = args.iter().any(|arg| arg == "--settings-file");
     if let Some(i) = args.iter().position(|a| a == "--settings-file") {
         preferences_path =
             std::path::PathBuf::from(args.get(i + 1).ok_or("--settings-file needs a path")?);
@@ -980,12 +1010,21 @@ fn run() -> Result<(), String> {
         let output = args
             .get(1)
             .ok_or("--render-settings needs an output PNG path")?;
-        let settings = settings::Settings::default();
-        let status = settings_ui::UiStatus::default();
-        let pixmap = if args.get(2).is_some_and(|s| s == "conversation") {
-            settings_ui::render_conversation_preview(&settings, &status, 760, 730)?
+        let settings = if explicit_preferences {
+            settings::Settings::load(&preferences_path)?
         } else {
-            settings_ui::render_preview(&settings, &status, 760, 730)?
+            settings::Settings::default()
+        };
+        let status = settings_ui::UiStatus::default();
+        let pixmap = match args.get(2).map(String::as_str) {
+            Some("conversation") => {
+                settings_ui::render_conversation_preview(&settings, &status, 760, 730)?
+            }
+            Some("connections") => {
+                settings_ui::render_connections_preview(&settings, &status, 760, 730)?
+            }
+            Some("runtime") => settings_ui::render_runtime_preview(&settings, &status, 760, 730)?,
+            _ => settings_ui::render_preview(&settings, &status, 760, 730)?,
         };
         pixmap.save_png(output).map_err(|e| e.to_string())?;
         return Ok(());

@@ -25,6 +25,10 @@ class NativePackageTests(unittest.TestCase):
             "LICENSE": "Project license", "docs/INSTALL.md": "Install: [Capture privacy](CAPTURE-PRIVACY.md)",
             "docs/CAPTURE-PRIVACY.md": "Privacy", "assets/OFL.txt": "Font license",
             "docs/DUAL-SYSTEM-PLAN.md": "Decision provider design and sources",
+            "docs/CONNECTIONS.md": "Provider settings",
+            "docs/CREDENTIAL-STORAGE.md": "OS credential storage",
+            "docs/settings-connections.png": "Test settings image",
+            "docs/settings-runtime.png": "Test runtime image",
             "docs/THIRD-PARTY-LICENSES.txt": "Overlay notices",
             "conversation/THIRD-PARTY-LICENSES.txt": "Helper notices",
             "conversation/README.md": "Helper usage", "conversation/example.json": "{}",
@@ -60,6 +64,8 @@ class NativePackageTests(unittest.TestCase):
         self.assertTrue((stage / "controller/conversation_orchestrator.py").is_file())
         self.assertTrue((stage / "controller/README.md").is_file())
         self.assertTrue((stage / "docs/DUAL-SYSTEM-PLAN.md").is_file())
+        self.assertTrue((stage / "docs/CONNECTIONS.md").is_file())
+        self.assertTrue((stage / "docs/CREDENTIAL-STORAGE.md").is_file())
         self.assertIn("](docs/CAPTURE-PRIVACY.md)", (stage / "README.md").read_text(encoding="utf-8"))
         self.assertIn("](CAPTURE-PRIVACY.md)", (self.root / "docs/INSTALL.md").read_text(encoding="utf-8"))
         self.assertFalse((stage / "conversation/private.json").exists())

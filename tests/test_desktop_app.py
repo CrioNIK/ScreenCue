@@ -189,6 +189,13 @@ class DesktopProcessTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "Owned native window lifecycle test requires Windows")
     def test_settings_start_stop_restart_and_close_reap_synthetic_helper(self):
+        self._settings_helper_lifecycle(managed=False)
+
+    @unittest.skipUnless(os.name == "nt", "Owned native window lifecycle test requires Windows")
+    def test_managed_connections_route_independent_environment_keys_without_audio(self):
+        self._settings_helper_lifecycle(managed=True)
+
+    def _settings_helper_lifecycle(self, managed):
         import ctypes
         from ctypes import wintypes
 
@@ -200,6 +207,9 @@ class DesktopProcessTests(unittest.TestCase):
         user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
         user32.IsWindowVisible.argtypes = [wintypes.HWND]
         user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.SendMessageTimeoutW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+            wintypes.LPARAM, wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_size_t)]
+        user32.SendMessageTimeoutW.restype = wintypes.LPARAM
         kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         kernel32.OpenProcess.restype = wintypes.HANDLE
         kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
@@ -249,8 +259,9 @@ class DesktopProcessTests(unittest.TestCase):
             physical_x = round((width - 760 * scale) / 2 + x * scale)
             physical_y = round((height - 730 * scale) / 2 + y * scale)
             location = physical_x | (physical_y << 16)
+            result = ctypes.c_size_t()
             for message, buttons in ((0x200, 0), (0x201, 1), (0x202, 0)):
-                self.assertTrue(user32.PostMessageW(window, message, buttons, location))
+                self.assertTrue(user32.SendMessageTimeoutW(window, message, buttons, location, 2, 3000, ctypes.byref(result)))
 
         # This fixture is deliberately not the production audio helper. It never
         # opens devices or invokes models, and its last session ignores Stop so
@@ -266,6 +277,10 @@ class DesktopProcessTests(unittest.TestCase):
             "import json,os,sys,time\nfrom pathlib import Path\n"
             "config=json.loads(Path(sys.argv[sys.argv.index('--config')+1]).read_text())\n"
             "root=Path(__file__).resolve().parents[1]\npid=os.getpid()\n"
+            "if config.get('fast'):\n"
+            " assert os.environ[config['fast']['key_env']]=='synthetic-fast-value'\n"
+            " assert os.environ[config['planner']['key_env']]=='synthetic-planner-value'\n"
+            " assert config.get('helper_config') is None\n"
             "marker=root/f'helper-{pid}.json'\n"
             "marker.write_text(json.dumps({'pid':pid,'state':'started'}))\n"
             "def emit(value):\n print(json.dumps(value),flush=True)\n"
@@ -275,22 +290,43 @@ class DesktopProcessTests(unittest.TestCase):
             " if json.loads(line).get('command')=='stop': break\n"
             "emit({'event':'hint','title':'Stale fixture','text':'This late answer must stay hidden.'})\n"
             "marker.write_text(json.dumps({'pid':pid,'state':'late_sent'}))\n"
-            "if config.get('ignore_stop'): time.sleep(30)\n"
+            "if config.get('ignore_stop') or (root/'ignore-stop.flag').exists(): time.sleep(30)\n"
             "emit({'event':'status','state':'stopped'})\n",
             encoding="utf-8",
         )
         config = application / "fixture.json"
         def save_config(ignore_stop=False):
+            if managed:
+                if ignore_stop:
+                    (application / "ignore-stop.flag").touch()
+                return
             config.write_text(json.dumps({
                 "engine": "conversation-orchestrator", "python_executable": sys.executable,
                 "ignore_stop": ignore_stop,
             }), encoding="utf-8")
         save_config()
-        self.save_settings(mode="conversation", audio_config=str(config))
+        environment = os.environ.copy()
+        if managed:
+            environment.update(SCREENCUE_TEST_FAST_INPUT_KEY="synthetic-fast-value",
+                               SCREENCUE_TEST_PLANNER_INPUT_KEY="synthetic-planner-value")
+            def api(auth, key_env=""):
+                return {"kind": "openai-compatible", "endpoint": "http://127.0.0.1:1/unused",
+                        "model": "synthetic", "auth": auth, "key_env": key_env}
+            self.save_settings(mode="conversation", connections={
+                "enabled": True, "python_executable": sys.executable,
+                "microphone": False, "system_audio": False,
+                # An unused audio profile must not require a saved key.
+                "transcription": api("vault"),
+                "fast": api("environment", "SCREENCUE_TEST_FAST_INPUT_KEY"),
+                "planner": api("environment", "SCREENCUE_TEST_PLANNER_INPUT_KEY"),
+            })
+        else:
+            self.save_settings(mode="conversation", audio_config=str(config))
         process = subprocess.Popen(
             [str(binary), "--app", "--settings-file", str(self.settings)],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             creationflags=subprocess.CREATE_NO_WINDOW,
+            env=environment,
         )
         def markers():
             return {int(path.stem.split("-")[1]) for path in application.glob("helper-*.json")}
@@ -301,6 +337,13 @@ class DesktopProcessTests(unittest.TestCase):
             click(window, 80, 224)
             click(window, 320, 650)
             first = new_helper(set())
+            if managed:
+                runtime = list(Path(self.temp.name).glob(".screencue-runtime-*/*.json"))
+                self.assertTrue(runtime)
+                for path in runtime:
+                    text = path.read_text(encoding="utf-8")
+                    self.assertNotIn("synthetic-fast-value", text)
+                    self.assertNotIn("synthetic-planner-value", text)
             overlay = wait_for(lambda: find_window(process.pid, "ScreenCue Overlay"), "Owned overlay was not created")
             wait_for(lambda: user32.IsWindowVisible(overlay), "Helper hint was not displayed")
             click(window, 590, 650)

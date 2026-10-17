@@ -1,7 +1,10 @@
 //! An interactive, opaque settings window. The hint window remains click-through.
 //! Pixels are redrawn only after an input or state change; there is no UI animation timer.
 
-use crate::settings::{Mode, Settings};
+use crate::{
+    connections::{AuthMode, Connection, Connections, Lane, ProviderKind},
+    settings::{Mode, Settings},
+};
 use fontdue::{
     layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle},
     Font, FontSettings,
@@ -32,6 +35,9 @@ pub struct UiStatus {
     pub conversation_state: String,
     pub notice: String,
     pub shortcut: String,
+    pub credential_states: [bool; 4],
+    pub credential_backend: String,
+    pub credential_error: Option<String>,
 }
 
 impl Default for UiStatus {
@@ -43,19 +49,33 @@ impl Default for UiStatus {
             conversation_state: "Stopped".into(),
             notice: String::new(),
             shortcut: "Ctrl + Alt + X".into(),
+            credential_states: [false; 4],
+            credential_backend: "System credential store".into(),
+            credential_error: None,
         }
     }
 }
 
-#[derive(Clone, Debug)]
+// Actions can carry a newly entered key. Never derive Debug or serialize them.
+#[derive(Clone)]
 pub enum Action {
     Changed(Settings),
-    ShowPreview { title: String, text: String },
+    ShowPreview {
+        title: String,
+        text: String,
+    },
     HideAll,
     StartConversation,
     StopConversation,
     CreateAudioConfig,
     OpenAudioConfig,
+    SaveConnections(Connections),
+    StoreConnectionKey {
+        lane: Lane,
+        connection: Connection,
+        secret: String,
+    },
+    DeleteConnectionKey(Lane),
     Close,
 }
 
@@ -63,12 +83,38 @@ pub enum Action {
 enum Tab {
     Appearance,
     Conversation,
+    Connections,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConnectionsPage {
+    Models,
+    Runtime,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Control {
     Appearance,
     Conversation,
+    Connections,
+    ConnectionModels,
+    ConnectionRuntime,
+    Lane(Lane),
+    Provider,
+    Endpoint,
+    Model,
+    Bridge,
+    Auth,
+    Key,
+    KeyEnvironment,
+    StoreKey,
+    DeleteKey,
+    SaveConnections,
+    ConnectionsEnabled,
+    Microphone,
+    SystemAudio,
+    Diarization,
+    Python,
     Guidance,
     ConversationMode,
     Capture,
@@ -102,7 +148,7 @@ fn area(x: f32, y: f32, w: f32, h: f32) -> Box2 {
     Box2 { x, y, w, h }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct Editor {
     value: String,
     cursor: usize,
@@ -194,13 +240,23 @@ struct View {
     hover: Option<Control>,
     prompt: Editor,
     config: Editor,
+    connections: Connections,
+    connections_page: ConnectionsPage,
+    lane: Lane,
+    endpoint: Editor,
+    model: Editor,
+    bridge: Editor,
+    key: Editor,
+    key_environment: Editor,
+    python: Editor,
     modifiers: ModifiersState,
 }
 
 impl View {
     fn new(settings: Settings, status: UiStatus) -> Self {
         let config = Editor::new(settings.audio_config.clone(), 4096, false);
-        Self {
+        let connections = settings.connections.clone();
+        let mut view = Self {
             settings,
             status,
             tab: Tab::Appearance,
@@ -208,13 +264,26 @@ impl View {
             hover: None,
             prompt: Editor::new(SAMPLE.into(), 16000, true),
             config,
+            connections,
+            connections_page: ConnectionsPage::Models,
+            lane: Lane::Transcription,
+            endpoint: Editor::new(String::new(), 2048, false),
+            model: Editor::new(String::new(), 200, false),
+            bridge: Editor::new(String::new(), 8192, true),
+            key: Editor::new(String::new(), 8192, false),
+            key_environment: Editor::new(String::new(), 128, false),
+            python: Editor::new(String::new(), 4096, false),
             modifiers: ModifiersState::empty(),
-        }
+        };
+        view.load_connection_editors();
+        view.python = Editor::new(view.connections.python_executable.clone(), 4096, false);
+        view
     }
     fn controls(&self) -> Vec<(Control, Box2)> {
         let mut controls = vec![
             (Control::Appearance, area(18., 153., 140., 42.)),
             (Control::Conversation, area(18., 202., 140., 42.)),
+            (Control::Connections, area(18., 251., 140., 42.)),
         ];
         match self.tab {
             Tab::Appearance => {
@@ -240,6 +309,53 @@ impl View {
                 (Control::Start, area(194., 627., 258., 44.)),
                 (Control::Stop, area(466., 627., 258., 44.)),
             ]),
+            Tab::Connections => {
+                controls.extend([
+                    (Control::ConnectionModels, area(194., 153., 258., 40.)),
+                    (Control::ConnectionRuntime, area(466., 153., 258., 40.)),
+                ]);
+                match self.connections_page {
+                    ConnectionsPage::Models => {
+                        for (index, lane) in Lane::ALL.into_iter().enumerate() {
+                            controls.push((
+                                Control::Lane(lane),
+                                area(194. + index as f32 * 136., 207., 122., 39.),
+                            ));
+                        }
+                        controls.push((Control::Provider, area(325., 266., 399., 40.)));
+                        let connection = self.connections.get(self.lane);
+                        if connection.kind != ProviderKind::Disabled {
+                            if connection.kind == ProviderKind::Command {
+                                controls.push((Control::Bridge, area(194., 338., 530., 105.)));
+                            } else {
+                                controls.extend([
+                                    (Control::Endpoint, area(194., 338., 530., 42.)),
+                                    (Control::Model, area(194., 405., 530., 42.)),
+                                ]);
+                            }
+                            controls.push((Control::Auth, area(325., 460., 399., 40.)));
+                            match connection.auth {
+                                AuthMode::Vault => controls.extend([
+                                    (Control::Key, area(194., 532., 530., 42.)),
+                                    (Control::StoreKey, area(194., 583., 258., 32.)),
+                                    (Control::DeleteKey, area(466., 583., 258., 32.)),
+                                ]),
+                                AuthMode::Environment => controls
+                                    .push((Control::KeyEnvironment, area(194., 532., 530., 42.))),
+                                AuthMode::None => {}
+                            }
+                        }
+                    }
+                    ConnectionsPage::Runtime => controls.extend([
+                        (Control::ConnectionsEnabled, area(194., 215., 530., 61.)),
+                        (Control::Microphone, area(194., 292., 530., 46.)),
+                        (Control::SystemAudio, area(194., 348., 530., 46.)),
+                        (Control::Diarization, area(194., 404., 530., 48.)),
+                        (Control::Python, area(194., 494., 530., 44.)),
+                    ]),
+                }
+                controls.push((Control::SaveConnections, area(194., 627., 530., 44.)));
+            }
         }
         controls
     }
@@ -249,11 +365,130 @@ impl View {
             .find(|(_, rect)| rect.contains(x, y))
             .map(|(control, _)| control)
     }
+    fn load_connection_editors(&mut self) {
+        self.clear_key();
+        let connection = self.connections.get(self.lane);
+        self.endpoint = Editor::new(connection.endpoint.clone(), 2048, false);
+        self.model = Editor::new(connection.model.clone(), 200, false);
+        self.bridge = Editor::new(
+            serde_json::to_string(&connection.command).unwrap_or_else(|_| "[]".into()),
+            8192,
+            true,
+        );
+        self.key_environment = Editor::new(connection.key_env.clone(), 128, false);
+    }
+    fn flush_connection(&mut self) -> bool {
+        let connection = self.connections.get_mut(self.lane);
+        connection.endpoint = self.endpoint.value.clone();
+        connection.model = self.model.value.clone();
+        connection.key_env = self.key_environment.value.clone();
+        if connection.kind == ProviderKind::Command {
+            match serde_json::from_str::<Vec<String>>(&self.bridge.value) {
+                Ok(command) => connection.command = command,
+                Err(_) => {
+                    self.status.notice = "Bridge must be a JSON array of strings, such as [\"/path/to/bridge\", \"--json\"].".into();
+                    return false;
+                }
+            }
+        }
+        true
+    }
+    fn clear_key(&mut self) {
+        self.key = Editor::new(String::new(), 8192, false);
+    }
+    fn may_copy(&self) -> bool {
+        self.focus != Some(Control::Key)
+    }
+    fn has_unsaved_connections(&self) -> bool {
+        self.connections != self.settings.connections
+            || (self.connections.get(self.lane).kind == ProviderKind::Command
+                && serde_json::from_str::<Vec<String>>(&self.bridge.value)
+                    .map(|command| command != self.connections.get(self.lane).command)
+                    .unwrap_or(true))
+    }
     fn activate(&mut self, control: Control, x: Option<f32>) -> Vec<Action> {
         let mut changed = false;
         match control {
             Control::Appearance => self.tab = Tab::Appearance,
             Control::Conversation => self.tab = Tab::Conversation,
+            Control::Connections => self.tab = Tab::Connections,
+            Control::ConnectionModels => self.connections_page = ConnectionsPage::Models,
+            Control::ConnectionRuntime => self.connections_page = ConnectionsPage::Runtime,
+            Control::Lane(lane) => {
+                if !self.flush_connection() {
+                    return vec![];
+                }
+                if self.lane != lane {
+                    self.clear_key();
+                    self.lane = lane;
+                    self.load_connection_editors();
+                }
+            }
+            Control::Provider => {
+                // Changing kind is also the escape hatch from an invalid bridge draft.
+                let choices = providers(self.lane);
+                let connection = self.connections.get_mut(self.lane);
+                let index = choices
+                    .iter()
+                    .position(|kind| *kind == connection.kind)
+                    .unwrap_or(0);
+                connection.kind = choices[(index + 1) % choices.len()];
+                self.clear_key();
+            }
+            Control::Auth => {
+                let connection = self.connections.get_mut(self.lane);
+                connection.auth = match connection.auth {
+                    AuthMode::None => AuthMode::Vault,
+                    AuthMode::Vault => AuthMode::Environment,
+                    AuthMode::Environment => AuthMode::None,
+                };
+                if connection.auth == AuthMode::Environment && connection.key_env.is_empty() {
+                    connection.key_env = self.lane.env_name().into();
+                    self.key_environment = Editor::new(connection.key_env.clone(), 128, false);
+                }
+                self.clear_key();
+            }
+            Control::Endpoint
+            | Control::Model
+            | Control::Bridge
+            | Control::Key
+            | Control::KeyEnvironment
+            | Control::Python => {
+                self.focus = Some(control);
+                if let Some(editor) = self.editor() {
+                    editor.cursor = editor.value.len();
+                    editor.all = false;
+                }
+            }
+            Control::SaveConnections => {
+                if self.flush_connection() {
+                    return vec![Action::SaveConnections(self.connections.clone())];
+                }
+            }
+            Control::StoreKey => {
+                if self.key.value.is_empty() {
+                    self.status.notice =
+                        "Paste a key before saving it to the credential store.".into();
+                } else if self.key.value.len() > 2560 || self.key.value.trim() != self.key.value {
+                    self.status.notice = "Keys must fit 2560 UTF-8 bytes without surrounding spaces. The draft was kept for editing.".into();
+                } else if self.flush_connection() {
+                    let secret = std::mem::take(&mut self.key.value);
+                    self.clear_key();
+                    return vec![Action::StoreConnectionKey {
+                        lane: self.lane,
+                        connection: self.connections.get(self.lane).clone(),
+                        secret,
+                    }];
+                }
+            }
+            Control::DeleteKey => {
+                self.clear_key();
+                return vec![Action::DeleteConnectionKey(self.lane)];
+            }
+            Control::ConnectionsEnabled => self.connections.enabled = !self.connections.enabled,
+            Control::Microphone => self.connections.microphone = !self.connections.microphone,
+            Control::SystemAudio => self.connections.system_audio = !self.connections.system_audio,
+            Control::Diarization => self.connections.diarization = !self.connections.diarization,
             Control::Guidance => {
                 self.settings.mode = Mode::Guidance;
                 changed = true;
@@ -322,10 +557,34 @@ impl View {
         match self.focus {
             Some(Control::Prompt) => Some(&mut self.prompt),
             Some(Control::Config) => Some(&mut self.config),
+            Some(Control::Endpoint) => Some(&mut self.endpoint),
+            Some(Control::Model) => Some(&mut self.model),
+            Some(Control::Bridge) => Some(&mut self.bridge),
+            Some(Control::Key) => Some(&mut self.key),
+            Some(Control::KeyEnvironment) => Some(&mut self.key_environment),
+            Some(Control::Python) => Some(&mut self.python),
             _ => None,
         }
     }
     fn after_edit(&mut self) -> Vec<Action> {
+        match self.focus {
+            Some(Control::Endpoint) => {
+                self.connections.get_mut(self.lane).endpoint = self.endpoint.value.clone()
+            }
+            Some(Control::Model) => {
+                self.connections.get_mut(self.lane).model = self.model.value.clone()
+            }
+            Some(Control::KeyEnvironment) => {
+                self.connections.get_mut(self.lane).key_env = self.key_environment.value.clone()
+            }
+            Some(Control::Python) => self.connections.python_executable = self.python.value.clone(),
+            Some(Control::Bridge) => {
+                if let Ok(command) = serde_json::from_str::<Vec<String>>(&self.bridge.value) {
+                    self.connections.get_mut(self.lane).command = command;
+                }
+            }
+            _ => {}
+        }
         if self.focus == Some(Control::Config) && self.settings.audio_config != self.config.value {
             self.settings.audio_config = self.config.value.clone();
             vec![Action::Changed(self.settings.clone())]
@@ -356,6 +615,57 @@ impl View {
             (None, false) => 0,
         };
         self.focus = Some(controls[next].0);
+    }
+}
+
+fn providers(lane: Lane) -> &'static [ProviderKind] {
+    match lane {
+        Lane::Decider => &[
+            ProviderKind::Disabled,
+            ProviderKind::Typesafe,
+            ProviderKind::OpenaiDecisions,
+            ProviderKind::Ollama,
+            ProviderKind::Command,
+        ],
+        _ => &[
+            ProviderKind::Disabled,
+            ProviderKind::OpenaiCompatible,
+            ProviderKind::Command,
+        ],
+    }
+}
+fn provider_label(kind: ProviderKind) -> &'static str {
+    match kind {
+        ProviderKind::Disabled => "Off  >",
+        ProviderKind::OpenaiCompatible => "OpenAI-compatible API  >",
+        ProviderKind::Typesafe => "Typesafe / Jev  >",
+        ProviderKind::OpenaiDecisions => "OpenAI Decisions  >",
+        ProviderKind::Ollama => "Ollama (local)  >",
+        ProviderKind::Command => "Command bridge  >",
+    }
+}
+fn lane_label(lane: Lane) -> &'static str {
+    match lane {
+        Lane::Transcription => "Audio",
+        Lane::Fast => "Fast model",
+        Lane::Planner => "Big model",
+        Lane::Decider => "System 1",
+    }
+}
+fn lane_index(lane: Lane) -> usize {
+    Lane::ALL
+        .iter()
+        .position(|candidate| *candidate == lane)
+        .unwrap_or(0)
+}
+fn masked_editor(editor: &Editor) -> Editor {
+    let mask = '\u{2022}';
+    Editor {
+        value: std::iter::repeat_n(mask, editor.value.chars().count()).collect(),
+        cursor: editor.value[..editor.cursor].chars().count() * mask.len_utf8(),
+        all: editor.all,
+        limit: editor.limit,
+        multiline: false,
     }
 }
 
@@ -414,6 +724,17 @@ impl SettingsWindow {
         }
         if self.view.config.value != settings.audio_config {
             self.view.config = Editor::new(settings.audio_config.clone(), 4096, false);
+        }
+        if settings.connections != self.view.settings.connections
+            && (!self.view.has_unsaved_connections()
+                || (self.view.connections == settings.connections
+                    && (self.view.connections.get(self.view.lane).kind != ProviderKind::Command
+                        || serde_json::from_str::<Vec<String>>(&self.view.bridge.value).is_ok())))
+        {
+            self.view.connections = settings.connections.clone();
+            self.view.load_connection_editors();
+            self.view.python =
+                Editor::new(settings.connections.python_executable.clone(), 4096, false);
         }
         self.view.settings = settings;
         self.view.status = status;
@@ -489,7 +810,11 @@ impl SettingsWindow {
                                 }
                             }
                             "c" | "x" => {
-                                if let Some(editor) = self.view.editor().filter(|e| e.all) {
+                                if !self.view.may_copy() {
+                                    self.view.status.notice =
+                                        "Keys can be pasted but cannot be copied from this field."
+                                            .into();
+                                } else if let Some(editor) = self.view.editor().filter(|e| e.all) {
                                     let text = editor.value.clone();
                                     if self.clipboard.is_none() {
                                         self.clipboard = arboard::Clipboard::new().ok();
@@ -525,6 +850,18 @@ impl SettingsWindow {
                         }
                         Key::Named(NamedKey::Enter) if self.view.focus == Some(Control::Config) => {
                             self.view.focus = Some(Control::Start)
+                        }
+                        Key::Named(NamedKey::Enter) if self.view.focus == Some(Control::Key) => {
+                            actions = self.view.activate(Control::StoreKey, None)
+                        }
+                        Key::Named(NamedKey::Enter)
+                            if self.view.focus == Some(Control::Bridge)
+                                && self.view.modifiers.shift_key() =>
+                        {
+                            actions = self.view.insert_text("\n");
+                        }
+                        Key::Named(NamedKey::Enter) if self.view.editor().is_some() => {
+                            self.view.advance_focus(false);
                         }
                         Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space)
                             if self.view.editor().is_none() =>
@@ -634,6 +971,27 @@ pub fn render_conversation_preview(
 ) -> Result<Pixmap, String> {
     let mut view = View::new(settings.clone(), status.clone());
     view.tab = Tab::Conversation;
+    draw(&view, &Fonts::new()?, width, height)
+}
+pub fn render_connections_preview(
+    settings: &Settings,
+    status: &UiStatus,
+    width: u32,
+    height: u32,
+) -> Result<Pixmap, String> {
+    let mut view = View::new(settings.clone(), status.clone());
+    view.tab = Tab::Connections;
+    draw(&view, &Fonts::new()?, width, height)
+}
+pub fn render_runtime_preview(
+    settings: &Settings,
+    status: &UiStatus,
+    width: u32,
+    height: u32,
+) -> Result<Pixmap, String> {
+    let mut view = View::new(settings.clone(), status.clone());
+    view.tab = Tab::Connections;
+    view.connections_page = ConnectionsPage::Runtime;
     draw(&view, &Fonts::new()?, width, height)
 }
 
@@ -952,6 +1310,12 @@ fn draw(view: &View, fonts: &Fonts, width: u32, height: u32) -> Result<Pixmap, S
             202.,
             view.tab == Tab::Conversation,
         ),
+        (
+            Control::Connections,
+            "Connections",
+            251.,
+            view.tab == Tab::Connections,
+        ),
     ] {
         if selected {
             c.rect(area(18., y, 140., 42.), [42, 28, 34]);
@@ -1178,7 +1542,11 @@ fn draw(view: &View, fonts: &Fonts, width: u32, height: u32) -> Result<Pixmap, S
                 WHITE,
             );
             c.text(
-                "Audio sources come from your configuration",
+                if view.settings.connections.enabled {
+                    "Using your saved Connections profile"
+                } else {
+                    "Audio sources come from your configuration"
+                },
                 area(213., 207., 480., 22.),
                 12.,
                 false,
@@ -1191,7 +1559,7 @@ fn draw(view: &View, fonts: &Fonts, width: u32, height: u32) -> Result<Pixmap, S
                 true,
                 WHITE,
             );
-            c.text("Listening starts only when you press Start. Use a local or hosted transcription and language model through your configuration.",area(194.,291.,530.,42.),13.,false,MUTED);
+            c.text(if view.settings.connections.enabled { "Listening starts only when you press Start. To use a JSON profile below, turn off the Connections profile in Runtime." } else { "Listening starts only when you press Start. Set up models in Connections, or choose an advanced JSON profile below." },area(194.,291.,530.,42.),13.,false,MUTED);
             c.edit(
                 view,
                 Control::Config,
@@ -1222,7 +1590,7 @@ fn draw(view: &View, fonts: &Fonts, width: u32, height: u32) -> Result<Pixmap, S
                 true,
                 RED,
             );
-            c.text("Your agent can send text cues directly. For live audio, choose your devices, transcription service and suggestion model in the config file.",area(213.,538.,487.,47.),13.,false,MUTED);
+            c.text("Choose independent models and keys in Connections. Advanced JSON profiles and direct cues from your agent remain available.",area(213.,538.,487.,47.),13.,false,MUTED);
             c.button(
                 view,
                 Control::Start,
@@ -1238,12 +1606,19 @@ fn draw(view: &View, fonts: &Fonts, width: u32, height: u32) -> Result<Pixmap, S
                 false,
             );
         }
+        Tab::Connections => draw_connections(&mut c, view),
     }
     for (control, rect) in view.controls() {
         if view.focus == Some(control)
             && matches!(
                 control,
-                Control::Capture | Control::Animation | Control::Width
+                Control::Capture
+                    | Control::Animation
+                    | Control::Width
+                    | Control::ConnectionsEnabled
+                    | Control::Microphone
+                    | Control::SystemAudio
+                    | Control::Diarization
             )
         {
             c.outline(
@@ -1269,6 +1644,285 @@ fn draw(view: &View, fonts: &Fonts, width: u32, height: u32) -> Result<Pixmap, S
         MUTED,
     );
     Ok(c.pixmap)
+}
+
+fn draw_connections(c: &mut Canvas<'_>, view: &View) {
+    c.text(
+        "YOUR MODELS, WORKING TOGETHER",
+        area(194., 32., 530., 22.),
+        10.,
+        true,
+        RED,
+    );
+    c.text(
+        "Every role. Its own connection.",
+        area(194., 62., 530., 44.),
+        26.,
+        true,
+        WHITE,
+    );
+    let description = match view.connections_page {
+        ConnectionsPage::Runtime => "Choose the sources and runtime. Listening starts separately.",
+        ConnectionsPage::Models => match view.lane {
+            Lane::Transcription => "Audio & speakers · transcription with optional speaker labels",
+            Lane::Fast => "Fast model · short replies as the conversation unfolds",
+            Lane::Planner => "Big model · context, prepared replies and useful next topics",
+            Lane::Decider => "System 1 · autonomous, low-latency decisions from ready actions",
+        },
+    };
+    c.text(description, area(194., 112., 530., 28.), 13., false, MUTED);
+    for (control, label, x, selected) in [
+        (
+            Control::ConnectionModels,
+            "Models & keys",
+            194.,
+            view.connections_page == ConnectionsPage::Models,
+        ),
+        (
+            Control::ConnectionRuntime,
+            "Runtime & audio",
+            466.,
+            view.connections_page == ConnectionsPage::Runtime,
+        ),
+    ] {
+        c.button(view, control, label, area(x, 153., 258., 40.), false);
+        if selected {
+            c.rect(area(x, 190., 258., 3.), RED);
+        }
+    }
+    match view.connections_page {
+        ConnectionsPage::Models => {
+            for (index, lane) in Lane::ALL.into_iter().enumerate() {
+                let x = 194. + index as f32 * 136.;
+                c.button(
+                    view,
+                    Control::Lane(lane),
+                    lane_label(lane),
+                    area(x, 207., 122., 39.),
+                    false,
+                );
+                if view.lane == lane {
+                    c.outline(area(x, 207., 122., 39.), RED);
+                }
+            }
+            let connection = view.connections.get(view.lane);
+            c.text("Connection", area(194., 278., 125., 24.), 14., true, WHITE);
+            c.button(
+                view,
+                Control::Provider,
+                provider_label(connection.kind),
+                area(325., 266., 399., 40.),
+                false,
+            );
+            if connection.kind == ProviderKind::Disabled {
+                c.rect(area(194., 331., 530., 167.), [19, 20, 25]);
+                c.accent(213., 354., 37.);
+                c.text(
+                    "THIS ROLE IS OPTIONAL",
+                    area(272., 348., 410., 24.),
+                    12.,
+                    true,
+                    RED,
+                );
+                c.text("Choose an API or a local command bridge above. Each role can use a different provider, model and credential.", area(213., 387., 487., 51.), 15., false, WHITE);
+                c.text(
+                    "Your existing agent bridges keep working independently.",
+                    area(213., 458., 487., 24.),
+                    12.,
+                    false,
+                    MUTED,
+                );
+            } else {
+                if connection.kind == ProviderKind::Command {
+                    c.text(
+                        "Bridge command · JSON argument array, no shell",
+                        area(194., 314., 530., 22.),
+                        12.,
+                        true,
+                        MUTED,
+                    );
+                    c.edit(
+                        view,
+                        Control::Bridge,
+                        &view.bridge,
+                        area(194., 338., 530., 105.),
+                        "[\"/path/to/bridge\", \"--json\"]",
+                    );
+                } else {
+                    c.text(
+                        "Endpoint · complete API URL",
+                        area(194., 314., 530., 22.),
+                        12.,
+                        true,
+                        MUTED,
+                    );
+                    c.edit(
+                        view,
+                        Control::Endpoint,
+                        &view.endpoint,
+                        area(194., 338., 530., 42.),
+                        "https://provider.example/v1/...",
+                    );
+                    c.text("Model", area(194., 383., 530., 22.), 12., true, MUTED);
+                    c.edit(
+                        view,
+                        Control::Model,
+                        &view.model,
+                        area(194., 405., 530., 42.),
+                        "Provider model identifier",
+                    );
+                }
+                c.text("Credential", area(194., 472., 125., 24.), 14., true, WHITE);
+                let auth = match connection.auth {
+                    AuthMode::None => "No API key  >",
+                    AuthMode::Vault => "Saved in system credential store  >",
+                    AuthMode::Environment => "Environment variable  >",
+                };
+                c.button(
+                    view,
+                    Control::Auth,
+                    auth,
+                    area(325., 460., 399., 40.),
+                    false,
+                );
+                match connection.auth {
+                    AuthMode::Vault => {
+                        let stored = view.status.credential_states[lane_index(view.lane)];
+                        let label = if view.status.credential_error.is_some() {
+                            format!(
+                                "Key status unavailable · {}",
+                                view.status.credential_backend
+                            )
+                        } else if stored && connection != view.settings.connections.get(view.lane) {
+                            "Key exists for the previously saved role; save a key for this change."
+                                .into()
+                        } else if stored {
+                            format!("Saved key exists · {}", view.status.credential_backend)
+                        } else {
+                            format!("No saved key · {}", view.status.credential_backend)
+                        };
+                        c.text(&label, area(194., 508., 530., 22.), 11., false, MUTED);
+                        // Only the masked surrogate reaches text layout or glyph rasterization.
+                        c.edit(
+                            view,
+                            Control::Key,
+                            &masked_editor(&view.key),
+                            area(194., 532., 530., 42.),
+                            "Paste a key to save or replace it",
+                        );
+                        c.button(
+                            view,
+                            Control::StoreKey,
+                            "Save key + this role",
+                            area(194., 583., 258., 32.),
+                            false,
+                        );
+                        c.button(
+                            view,
+                            Control::DeleteKey,
+                            "Delete saved key",
+                            area(466., 583., 258., 32.),
+                            false,
+                        );
+                    }
+                    AuthMode::Environment => {
+                        c.text(
+                            "Variable name · the value stays outside this profile",
+                            area(194., 508., 530., 22.),
+                            12.,
+                            false,
+                            MUTED,
+                        );
+                        c.edit(
+                            view,
+                            Control::KeyEnvironment,
+                            &view.key_environment,
+                            area(194., 532., 530., 42.),
+                            view.lane.env_name(),
+                        );
+                        c.text(
+                            "Set the variable before launching ScreenCue.",
+                            area(194., 586., 530., 24.),
+                            12.,
+                            false,
+                            MUTED,
+                        );
+                    }
+                    AuthMode::None => {
+                        c.text("For local endpoints or bridges that manage their own login. No credential is supplied by ScreenCue.", area(194., 526., 530., 52.), 14., false, MUTED);
+                    }
+                }
+            }
+        }
+        ConnectionsPage::Runtime => {
+            c.text(
+                "Use this Connections profile",
+                area(194., 217., 455., 27.),
+                17.,
+                true,
+                WHITE,
+            );
+            c.text(
+                "Takes precedence over the advanced JSON profile.",
+                area(194., 249., 455., 24.),
+                12.,
+                false,
+                MUTED,
+            );
+            c.toggle(678., 222., view.connections.enabled, true);
+            c.rect(area(194., 279., 530., 1.), [46, 47, 54]);
+            for (title, detail, y, on) in [
+                (
+                    "Microphone",
+                    "Your voice",
+                    292.,
+                    view.connections.microphone,
+                ),
+                (
+                    "System audio",
+                    "Other participants on supported devices",
+                    348.,
+                    view.connections.system_audio,
+                ),
+                (
+                    "Speaker labels (diarization)",
+                    "Model must support diarized_json or speaker segments",
+                    404.,
+                    view.connections.diarization,
+                ),
+            ] {
+                c.text(title, area(194., y, 455., 24.), 15., true, WHITE);
+                c.text(detail, area(194., y + 25., 455., 21.), 11., false, MUTED);
+                c.toggle(678., y + 5., on, true);
+            }
+            c.text(
+                "Python executable · absolute path for the coordinator",
+                area(194., 468., 530., 23.),
+                12.,
+                true,
+                MUTED,
+            );
+            c.edit(
+                view,
+                Control::Python,
+                &view.python,
+                area(194., 494., 530., 44.),
+                "Absolute path to Python 3.11 or newer",
+            );
+            c.text("Speaker labels do not establish identities or roles. Advanced role mappings remain available in the JSON profile.", area(194., 555., 530., 45.), 13., false, MUTED);
+        }
+    }
+    c.button(
+        view,
+        Control::SaveConnections,
+        if view.has_unsaved_connections() {
+            "Save connections · unsaved changes"
+        } else {
+            "Save connections"
+        },
+        area(194., 627., 530., 44.),
+        true,
+    );
 }
 
 #[cfg(test)]
@@ -1351,5 +2005,132 @@ mod tests {
                 .unwrap();
         assert_eq!(small.width(), 570);
         assert!(render_preview(&Settings::default(), &UiStatus::default(), 0, 0).is_err());
+    }
+    #[test]
+    fn connection_drafts_are_isolated_and_do_not_start_listening() {
+        let mut view = View::new(Settings::default(), UiStatus::default());
+        let original = view.settings.clone();
+        assert!(view.activate(Control::Connections, None).is_empty());
+        assert!(view.activate(Control::Lane(Lane::Fast), None).is_empty());
+        view.activate(Control::Provider, None);
+        view.activate(Control::Model, None);
+        view.model.all = true;
+        assert!(view.insert_text("quick-local-model").is_empty());
+        view.activate(Control::Lane(Lane::Planner), None);
+        assert_ne!(view.model.value, "quick-local-model");
+        view.activate(Control::Lane(Lane::Fast), None);
+        assert_eq!(view.model.value, "quick-local-model");
+        assert_eq!(view.settings, original);
+        assert!(matches!(
+            view.activate(Control::SaveConnections, None).as_slice(),
+            [Action::SaveConnections(_)]
+        ));
+        view.activate(Control::ConnectionRuntime, None);
+        assert!(view.activate(Control::ConnectionsEnabled, None).is_empty());
+        assert!(view.activate(Control::Diarization, None).is_empty());
+        assert!(view.connections.diarization);
+    }
+    #[test]
+    fn keys_are_masked_not_copyable_not_serialized_and_bound_to_the_selected_role() {
+        let mut view = View::new(Settings::default(), UiStatus::default());
+        view.activate(Control::Connections, None);
+        view.activate(Control::Lane(Lane::Fast), None);
+        view.connections.get_mut(Lane::Fast).kind = ProviderKind::OpenaiCompatible;
+        view.connections.get_mut(Lane::Fast).auth = AuthMode::Vault;
+        view.activate(Control::Key, None);
+        view.insert_text("private-key-🌍");
+        let masked = masked_editor(&view.key);
+        assert!(masked
+            .value
+            .chars()
+            .all(|character| character == '\u{2022}'));
+        assert_eq!(masked.value.chars().count(), 13);
+        assert_eq!(masked.cursor, masked.value.len());
+        assert!(!view.may_copy());
+        assert!(!serde_json::to_string(&view.settings)
+            .unwrap()
+            .contains("private-key"));
+        assert!(!serde_json::to_string(&view.connections)
+            .unwrap()
+            .contains("private-key"));
+        let actions = view.activate(Control::StoreKey, None);
+        match &actions[0] {
+            Action::StoreConnectionKey {
+                lane,
+                connection,
+                secret,
+            } => {
+                assert_eq!(*lane, Lane::Fast);
+                assert_eq!(connection, view.connections.get(Lane::Fast));
+                assert_eq!(secret, "private-key-🌍");
+            }
+            _ => panic!("Expected a scoped key action"),
+        }
+        assert!(view.key.value.is_empty());
+        view.activate(Control::Key, None);
+        view.insert_text("another-key");
+        view.activate(Control::Lane(Lane::Planner), None);
+        assert!(view.key.value.is_empty());
+    }
+    #[test]
+    fn different_key_contents_render_identical_masked_pixels() {
+        let mut view = View::new(Settings::default(), UiStatus::default());
+        view.tab = Tab::Connections;
+        view.connections.get_mut(Lane::Transcription).kind = ProviderKind::OpenaiCompatible;
+        view.connections.get_mut(Lane::Transcription).auth = AuthMode::Vault;
+        view.key = Editor::new("secret-ALPHA".into(), 8192, false);
+        let fonts = Fonts::new().unwrap();
+        let first = draw(&view, &fonts, 760, 730).unwrap();
+        view.key = Editor::new("hidden-BRAVO".into(), 8192, false);
+        let second = draw(&view, &fonts, 760, 730).unwrap();
+        assert_eq!(first.data(), second.data());
+    }
+    #[test]
+    fn malformed_bridge_blocks_save_and_role_switch_without_losing_draft() {
+        let mut view = View::new(Settings::default(), UiStatus::default());
+        view.connections.get_mut(Lane::Transcription).kind = ProviderKind::Command;
+        view.bridge = Editor::new("[invalid".into(), 8192, true);
+        assert!(view.activate(Control::SaveConnections, None).is_empty());
+        view.activate(Control::Lane(Lane::Fast), None);
+        assert_eq!(view.lane, Lane::Transcription);
+        assert_eq!(view.bridge.value, "[invalid");
+        view.bridge = Editor::new("[\"bridge\",\"--json\"]".into(), 8192, true);
+        view.activate(Control::Lane(Lane::Fast), None);
+        assert_eq!(
+            view.connections.get(Lane::Transcription).command,
+            vec!["bridge", "--json"]
+        );
+        assert_eq!(view.lane, Lane::Fast);
+    }
+    #[test]
+    fn connection_controls_fit_the_window_and_hide_irrelevant_fields() {
+        let mut view = View::new(Settings::default(), UiStatus::default());
+        view.tab = Tab::Connections;
+        for page in [ConnectionsPage::Models, ConnectionsPage::Runtime] {
+            view.connections_page = page;
+            for lane in Lane::ALL {
+                view.lane = lane;
+                for kind in providers(lane) {
+                    view.connections.get_mut(lane).kind = *kind;
+                    for auth in [AuthMode::None, AuthMode::Vault, AuthMode::Environment] {
+                        view.connections.get_mut(lane).auth = auth;
+                        for (_, rect) in view.controls() {
+                            assert!(
+                                rect.x >= 0.
+                                    && rect.y >= 0.
+                                    && rect.x + rect.w <= WIDTH
+                                    && rect.y + rect.h <= HEIGHT
+                            );
+                        }
+                        if *kind == ProviderKind::Disabled && page == ConnectionsPage::Models {
+                            assert!(!view
+                                .controls()
+                                .iter()
+                                .any(|(control, _)| *control == Control::Key));
+                        }
+                    }
+                }
+            }
+        }
     }
 }
